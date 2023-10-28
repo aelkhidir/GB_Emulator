@@ -347,6 +347,10 @@ public:
 
 	void RRCA(uint8_t opcode);
 
+	void DAA(uint8_t opcode);
+
+	void SBCImmediate(uint8_t opcode);
+
 	void SLA(uint8_t opcode);
 
 	void SRA(uint8_t opcode);

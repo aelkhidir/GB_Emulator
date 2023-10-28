@@ -514,9 +514,9 @@ Instruction GameBoy::DecodeOpcode(uint8_t opcode)
 	case 0xD2:
 		return Instruction::JP_COND; // unimplemented
 	case 0xE2:
-		return Instruction::LD_TO_ACC;
-	case 0xF2:
 		return Instruction::LD_FROM_ACC;
+	case 0xF2:
+		return Instruction::LD_TO_ACC;
 	case 0xC3:
 		return Instruction::JP; // unimplemented
 	case 0xF3:
@@ -878,7 +878,7 @@ uint8_t GameBoy::Pop()
 }
 
 void GameBoy::Pop16(uint8_t opcode)
-{
+{	
 	uint8_t lsb = Pop();
 	uint8_t msb = Pop();
 	std::string reg_string;
@@ -902,7 +902,7 @@ void GameBoy::Pop16(uint8_t opcode)
 		break;
 	case 0xF1:
 		registerA = msb;
-		registerF = lsb;
+		registerF = lsb & 0xf0;
 		reg_string = "AF";
 		break;
 	default:
@@ -1212,6 +1212,12 @@ void GameBoy::ExecuteInstruction(uint8_t opcode)
 	case Instruction::RRCA:
 		RRCA(opcode);
 		return;
+	case Instruction::DAA:
+		DAA(opcode);
+		return;
+	case Instruction::SBC_IMMEDIATE:
+		SBCImmediate(opcode);
+		return;
 	case Instruction::PREFIX_CB:
 		ExecuteCBInstruction();
 		return;
@@ -1441,10 +1447,10 @@ void GameBoy::IndirectLD(uint8_t opcode)
 	}
 }
 
-void GameBoy::LDAccumulator(uint8_t opcode)
+void GameBoy::LDfromAccumulator(uint8_t opcode)
 {
 	uint16_t address = 0xFF00 + GetRegisterValue(C);
-	SetRegister(A, memory[address]);
+	Write(GetRegisterValue(A), address);
 
 	if (printLogs)
 	{
@@ -1452,10 +1458,10 @@ void GameBoy::LDAccumulator(uint8_t opcode)
 	}
 }
 
-void GameBoy::LDfromAccumulator(uint8_t opcode)
+void GameBoy::LDAccumulator(uint8_t opcode)
 {
-	uint16_t address = 0xFF00 + GetRegisterValue(C);
-	Write(GetRegisterValue(A), address);
+	uint16_t address = 0xFF00 + GetRegisterValue(C); 
+	SetRegister(A, Read(address));
 
 	if (printLogs)
 	{
@@ -1926,6 +1932,67 @@ void GameBoy::RRCA(uint8_t opcode)
 	}
 }
 
+void GameBoy::DAA(uint8_t opcode)
+{
+	if (!GetFlag(NegativeFlag))
+	{
+		if (GetFlag(CarryFlag) || registerA > 0x99)
+		{
+			registerA += 0x60;
+			SetFlag(CarryFlag, true);
+		}
+
+		if (GetFlag(HalfCarryFlag) || (registerA & 0x0f) > 0x09)
+		{
+			registerA += 0x06;
+		}
+	}
+
+	else
+	{
+		if (GetFlag(CarryFlag))
+		{
+			registerA -= 0x60;
+		}
+
+		if (GetFlag(HalfCarryFlag))
+		{
+			registerA -= 0x06;
+		}
+	}
+
+	SetFlag(ZeroFlag, registerA == 0);
+	SetFlag(HalfCarryFlag, false);
+	UpdateClock(4);
+
+	if (printLogs)
+	{
+		std::cout << "DAA\n";
+	}
+}
+
+void GameBoy::SBCImmediate(uint8_t opcode)
+{
+	uint8_t Acc = GetRegisterValue(A);
+	uint8_t immediateValue = ReadROMLine();
+
+	uint16_t result = Acc - immediateValue - GetFlag(CarryFlag);
+	bool halfCarry = ((Acc & 0xF) - (immediateValue & 0xF) - GetFlag(CarryFlag)) & 0x10;
+
+	SetRegister(A, result);
+
+	SetFlag(ZeroFlag, uint8_t(result) == 0);
+	SetFlag(NegativeFlag, 1);
+	SetFlag(HalfCarryFlag, halfCarry);
+	SetFlag(CarryFlag, result > 0xFF);
+	UpdateClock(4);
+
+	if (printLogs)
+	{
+		PrintImmediateInstruction(DecodeOpcode(opcode), immediateValue, A);
+	}
+}
+
 void GameBoy::ShiftRightThroughCarry(uint8_t opcode)
 {
 	uint8_t reg = opcode & 0b00000111;
@@ -1996,13 +2063,26 @@ void GameBoy::Decrement(uint8_t opcode)
 
 void GameBoy::Decrement16(uint8_t opcode)
 {
-	uint8_t reg = opcode & 0b00000111;
+	uint8_t reg = (opcode & 0b00110000) >> 4;
 	uint16_t value = Get16BitRegisterValue(reg);
+	std::string reg_string;
 	Set16BitRegister(reg, value - 1);
+
+	switch (reg)
+	{
+	case 0:
+		reg_string = "BC";
+	case 1:
+		reg_string = "DE";
+	case 2:
+		reg_string = "HL";
+	case 3:
+		reg_string = "AF";
+	}
 
 	if (printLogs)
 	{
-		PrintInstruction16(DecodeOpcode(opcode), reg);
+		std::cout << "DEC16 " << reg_string << "\n";
 	}
 }
 
@@ -2407,7 +2487,7 @@ void GameBoy::Bit(uint8_t opcode)
 	uint8_t reg = (opcode % 0x08);
 	bool result = ExtractBit(GetRegisterValue(reg), bit);
 
-	SetFlag(ZeroFlag, result);
+	SetFlag(ZeroFlag, !result);
 	SetFlag(NegativeFlag, 0);
 	SetFlag(HalfCarryFlag, 1);
 
