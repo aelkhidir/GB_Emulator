@@ -90,12 +90,15 @@ private:
 
 	// Interrupts, clock
 	bool IME = 0;
-	bool ScheduledIME = 0;
 	bool systemClockActive = 1;
 	bool mainClockActive = 1;
+	uint64_t timer_clock = 0;
+	uint64_t div_clock = 0;
+
 	bool haltMode = false;
 	bool haltBug = false;
-	uint64_t cycles = 0;
+	uint64_t cpu_cycles = 0;
+	uint64_t ppu_cycles = 0;
 
 	// real clock for emulating FPS
 	clock_t realTime = clock();
@@ -128,8 +131,6 @@ public:
 	void WaitForFrameTime();
 
 	void HandleInterrupts();
-
-	void ResetInterruptFlag(uint8_t num);
 
 	void PointToCartridgeMemory();
 
