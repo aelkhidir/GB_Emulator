@@ -146,7 +146,7 @@ public:
 
 	bool CanAccessVRAM();
 
-	std::map<std::pair<uint8_t, uint8_t>, uint8_t> DecodeTileMap();
+	std::array<uint8_t, 256 * 256> DecodeTileMap();
 
 	std::array<uint8_t, 64> ExtractTileData(uint8_t offset);
 

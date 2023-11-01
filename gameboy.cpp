@@ -113,6 +113,12 @@ uint8_t GetLowByte(uint16_t value)
 
 void GameBoy::Write(uint8_t value, uint16_t address)
 {
+	// Cartridge memory
+	if (address >= 0x0000 && address <= 0x7FFF)
+	{
+		return;
+	}
+
 	if (address >= 0x8000 && address < 0xA000 && !CanAccessVRAM())
 	{
 		return;
@@ -157,7 +163,8 @@ uint8_t GameBoy::Read(uint16_t address)
 
 	if (address == 0xFF00)
 	{
-		return 0xFF;
+		/*return 0xFF;*/
+		UpdateJoypadInput();
 	}
 
 	return memory[address];
@@ -204,8 +211,6 @@ void GameBoy::UpdatePPU(uint64_t cycleCount)
 			interruptRequests |= (1 << 1);
 		}
 	}
-
-	
 
 	if (nextScanlineNumber != previousScanlineNumber)
 	{
@@ -254,11 +259,10 @@ void GameBoy::ExecutionLoop()
 
 		if (ppu_cycles >= 70224)
 		{
-			/*UpdateJoypadInput();*/
 			if (ExtractBit(memory[0xFF40], 7) && ExtractBit(memory[0xFF40], 0))
 			{
 				DrawScreen();
-				WaitForFrameTime();
+				//WaitForFrameTime();
 				ppu_cycles %= 70224;
 			}		
 
@@ -596,7 +600,7 @@ void GameBoy::LoadRom(std::string filename, uint16_t startAddress)
 
 		for (uint32_t byteNumber = 0; byteNumber < bytes.size(); byteNumber++)
 		{
-			Write(bytes[byteNumber], startAddress + byteNumber);
+			memory[startAddress + byteNumber] = bytes[byteNumber];
 		}
 		return;
 	}
@@ -614,10 +618,14 @@ void GameBoy::LoadCartridge(std::string filename)
 			(std::istreambuf_iterator<char>()));
 
 		cart.close();
-
-		for (uint32_t byteNumber = 0; byteNumber < bytes.size(); byteNumber++)
+		for (uint32_t byteNumber = 0; byteNumber < 0x100; byteNumber++)
 		{
-			Write(bytes[byteNumber], byteNumber);
+			cartridgeMemory[byteNumber] = bytes[byteNumber];
+		}
+
+		for (uint32_t byteNumber = 0x100; byteNumber < bytes.size(); byteNumber++)
+		{
+			memory[byteNumber] = bytes[byteNumber];
 		}
 		return;
 	}
@@ -628,7 +636,7 @@ void GameBoy::UnmapBootRom()
 {
 	for (uint32_t byteNumber = 0; byteNumber < 0x100; byteNumber++)
 	{
-		Write(cartridgeMemory[byteNumber], byteNumber);
+		memory[byteNumber] = cartridgeMemory[byteNumber];
 	}
 }
 
@@ -664,11 +672,11 @@ uint8_t GameBoy::GetColor(uint8_t index)
 	}
 }
 
-std::map<std::pair<uint8_t, uint8_t>, uint8_t> GameBoy::DecodeTileMap()
+std::array<uint8_t, 256 * 256> GameBoy::DecodeTileMap()
 {
 	uint8_t LCDControl = memory[0xFF40];
 	uint16_t startAddress = ExtractBit(LCDControl, 3) ? 0x9C00 : 0x9800;
-	std::map<std::pair<uint8_t, uint8_t>, uint8_t> backgroundColors;
+	std::array<uint8_t, 256 * 256> backgroundColors;
 	for (uint32_t tileNum = 0; tileNum < 32 * 32; tileNum++)
 	{
 		std::array<uint8_t, 64> tileData = ExtractTileData(memory[startAddress + tileNum]);
@@ -679,7 +687,7 @@ std::map<std::pair<uint8_t, uint8_t>, uint8_t> GameBoy::DecodeTileMap()
 		{
 			uint32_t offsetX = pixelNum % 8;
 			uint32_t offsetY = pixelNum / 8;
-			backgroundColors[{baseX + offsetX, baseY + offsetY}] = GetColor(tileData[pixelNum]);
+			backgroundColors[(baseX + offsetX) + 256 * (baseY + offsetY)] = GetColor(tileData[pixelNum]);
 		}
 	}
 	return backgroundColors;
@@ -706,7 +714,7 @@ std::map<std::pair<uint8_t, uint8_t>, uint8_t> GameBoy::ExtractFullTileMap()
 
 void GameBoy::DrawScreen()
 {
-	std::map<std::pair<uint8_t, uint8_t>, uint8_t> backgroundColors = DecodeTileMap();
+	std::array<uint8_t, 256 * 256> backgroundColors = DecodeTileMap();
 	uint8_t SCY = memory[0xFF42];
 	uint8_t SCX = memory[0xFF43];
 
@@ -717,7 +725,7 @@ void GameBoy::DrawScreen()
 	{
 		for (uint8_t offsetY = 0; offsetY < 144; offsetY++)
 		{
-			uint8_t color = 255 - 85 * backgroundColors[{SCX + offsetX, SCY + offsetY}];
+			uint8_t color = 255 - 85 * backgroundColors[(SCX + offsetX) + 256 *  (SCY + offsetY )];
 			SDL_SetRenderDrawColor(renderer, color, color, color, 255);
 			SDL_RenderDrawPoint(renderer, offsetX, offsetY);
 		}
@@ -728,14 +736,14 @@ void GameBoy::DrawScreen()
 
 void GameBoy::DrawFullBackground()
 {
-	std::map<std::pair<uint8_t, uint8_t>, uint8_t> backgroundColors = DecodeTileMap();
+	std::array<uint8_t, 256 * 256> backgroundColors = DecodeTileMap();
 	SDL_RenderSetLogicalSize(renderer, 256, 256);
 	SDL_RenderClear(renderer);
 	for (uint16_t offsetX = 0; offsetX < 256; offsetX++)
 	{
 		for (uint16_t offsetY = 0; offsetY < 256; offsetY++)
 		{
-			uint8_t color = 255 - 85 * backgroundColors[{offsetX, offsetY}];
+			uint8_t color = 255 - 85 * backgroundColors[offsetX + 256 * offsetY];
 			SDL_SetRenderDrawColor(renderer, color, color, color, 255);
 			SDL_RenderDrawPoint(renderer, offsetX, offsetY);
 		}
@@ -2758,7 +2766,7 @@ void GameBoy::UpdateJoypadInput()
 {
 	uint8_t& joypad = memory[0xFF00];
 
-	/*auto setBit = [&](uint8_t num, bool state) {
+	auto setBit = [&](uint8_t num, bool state) {
 		joypad &= ~(1 << num);
 		joypad |= (uint8_t(state) << num);
 	};
@@ -2775,9 +2783,9 @@ void GameBoy::UpdateJoypadInput()
 	setBit(2, !w_pressed);
 	setBit(3, !s_pressed);
 	setBit(4, !shift_pressed);
-	setBit(5, shift_pressed);*/
+	setBit(5, shift_pressed);
 
-	joypad = 0xFF;
+	//std::cout << std::format("{:02X}\n", joypad);
 }
 
 std::string GameBoy::RegisterToString(uint8_t reg)
