@@ -113,7 +113,7 @@ private:
 	FIFO spriteFifo = FIFO(*this);
 
 	// Options 
-	bool printLogs = true;
+	bool printLogs = false;
 
 	// Serial Transfer Stream
 	std::ofstream serial_transfer;
@@ -376,6 +376,8 @@ public:
 	std::map<std::pair<uint8_t, uint8_t>, uint8_t> ExtractFullTileMap();
 
 	bool CheckPPUtoVRAMAccess();
+
+	void UpdateJoypadInput();
 
 	void LogCPUState();
 };

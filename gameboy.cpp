@@ -13,7 +13,7 @@ void GameBoy::Reset()
 
 void GameBoy::SetToPostBootState()
 {
-	bool unmapBootRom = true;
+	bool unmapBootRom = false;
 
 	if (unmapBootRom)
 	{
@@ -118,13 +118,12 @@ void GameBoy::Write(uint8_t value, uint16_t address)
 		return;
 	}
 
-	memory[address] = value;
-
-	// Updates that need to be done after each write
-	if (address == 0xFF44)
+	if (address >= 0xFEA0 && address <= 0xFEFF)
 	{
-		UpdateVBlank();
+		return;
 	}
+
+	memory[address] = value;
 
 	if (address == 0xFF50 && value != 0x00)
 	{
@@ -151,37 +150,24 @@ void GameBoy::Write(uint8_t value, uint16_t address)
 // todo: conditions for correct read
 uint8_t GameBoy::Read(uint16_t address)
 {
-	// TODO: remove when done debugging
-	if (address == 0xFF44)
+	if (address >= 0xFEA0 && address <= 0xFEFF)
 	{
-		return 0x90;
+		return 0xFF;
+	}
+
+	if (address == 0xFF00)
+	{
+		return 0xFF;
 	}
 
 	return memory[address];
 }
 
-void GameBoy::UpdateVBlank()
-{
-	uint8_t LY = memory[0xFF44];
-
-	if (LY >= 144)
-	{
-		// Set V-blank (bit 4) in STAT
-		memory[0xFF41] |= 0b00010000;
-	}
-
-	else
-	{
-		// Reset V-blank
-		memory[0xFF41] &= 0b11101111;
-	}
-}
 
 void GameBoy::WriteScanlineY(uint8_t value)
 {
 	// todo: check for access rights
 	Write(value, 0xFF44);
-	UpdateVBlank();
 }
 
 void GameBoy::UpdatePPU(uint64_t cycleCount)
@@ -192,18 +178,32 @@ void GameBoy::UpdatePPU(uint64_t cycleCount)
 	Mode previousMode = CalculatePPUMode();
 	Mode nextMode = CalculatePPUMode(cycleCount);
 
+	uint8_t& control = memory[0xFF40];
+
+	if (!ExtractBit(control, 7))
+	{
+		return;
+	}
+
 	uint8_t& stat = memory[0xFF41];
 	uint8_t& interruptRequests = memory[0xFF0F];
-	//stat |= uint8_t(nextMode);
+	
+	stat |= uint8_t(nextMode);
+	stat &= (uint8_t(nextMode) | 0b11111100);
 
-	//if (previousMode != nextMode)
-	//{
-	//	if (nextMode == Mode::Hblank && ExtractBit(stat, 3) || nextMode == Mode::Vblank && ExtractBit(stat, 4)
-	//		|| nextMode == Mode::OAMSearch && ExtractBit(stat, 5) || nextMode == Mode::PixelTransfer && ExtractBit(stat, 6))
-	//	{
-	//		interruptRequests |= (1 << 1);
-	//	}
-	//}
+
+	if (previousMode != nextMode)
+	{
+		if (nextMode == Mode::Vblank)
+		{
+			interruptRequests |= (1 << 0);
+		}
+		if (nextMode == Mode::Hblank && ExtractBit(stat, 3) || nextMode == Mode::Vblank && ExtractBit(stat, 4)
+			|| nextMode == Mode::OAMSearch && ExtractBit(stat, 5) || nextMode == Mode::PixelTransfer && ExtractBit(stat, 6))
+		{
+			interruptRequests |= (1 << 1);
+		}
+	}
 
 	
 
@@ -212,14 +212,20 @@ void GameBoy::UpdatePPU(uint64_t cycleCount)
 		uint8_t LY = memory[0xFF44];
 		uint8_t LYC = memory[0xFF45];
 		WriteScanlineY(LY + nextScanlineNumber - previousScanlineNumber);
-		//if (LY == LYC)
-		//{
-		//	stat |= (1 << 2);
-		//	if (ExtractBit(stat, 6))
-		//	{
-		//		interruptRequests |= (1 << 1);
-		//	}
-		//}
+
+		if (LY == LYC)
+		{
+			stat |= (1 << 2);
+			if (ExtractBit(stat, 6))
+			{
+				interruptRequests |= (1 << 1);
+			}
+		}
+
+		else
+		{
+			stat &= ~(1 << 2);
+		}
 	}
 }
 
@@ -227,10 +233,10 @@ void GameBoy::ExecutionLoop()
 {
 	while (true)
 	{
-		if (!haltMode)
+		/*if (!haltMode)
 		{
 			LogCPUState();
-		}
+		}*/
 		
 		HandleInterrupts();
 
@@ -246,12 +252,16 @@ void GameBoy::ExecutionLoop()
 		}
 	
 
-		if (ExtractBit(memory[0xFF40], 7) && ExtractBit(memory[0xFF40], 0) && ppu_cycles >= 70224)
+		if (ppu_cycles >= 70224)
 		{
-			DrawScreen();
- 			RenderTileMap();
-			WaitForFrameTime();
-			ppu_cycles %= 70224;
+			/*UpdateJoypadInput();*/
+			if (ExtractBit(memory[0xFF40], 7) && ExtractBit(memory[0xFF40], 0))
+			{
+				DrawScreen();
+				WaitForFrameTime();
+				ppu_cycles %= 70224;
+			}		
+
 		}
 	}
 
@@ -262,17 +272,17 @@ void GameBoy::ExecutionLoop()
 
 void GameBoy::WaitForFrameTime()
 {
-	uint64_t millsecondsPassed = std::clock() - realTime;
+	uint64_t millisecondsPassed = std::clock() - realTime;
 	realTime = std::clock();
 
-	if (millsecondsPassed > 17) 
+	if (millisecondsPassed > 17) 
 	{ 
 		return; 
 	}
 
 	else
 	{
-		Sleep(17 - millsecondsPassed);
+		Sleep(17 - millisecondsPassed);
 		realTime = std::clock();
 	}
 }
@@ -303,11 +313,6 @@ void GameBoy::HandleInterrupts()
 {
 	uint8_t& interruptEnable = memory[0xFFFF];
 	uint8_t& interruptRequests = memory[0xFF0F];
-
-	if (CalculatePPUMode() == Mode::Vblank)
-	{
-		interruptRequests |= 0x1;
-	}
 
 	// Todo: STAT interrupt, TIMA interrupt, Serial interrupt, Joypad interrupt
 	// Todo: halt should be disabled as soon as an interrupt is pending (not necessarily handled)
@@ -610,12 +615,7 @@ void GameBoy::LoadCartridge(std::string filename)
 
 		cart.close();
 
-		for (uint32_t byteNumber = 0; byteNumber < 0x100; byteNumber++)
-		{
-			cartridgeMemory[byteNumber] = bytes[byteNumber];
-		}
-
-		for (uint32_t byteNumber = 0x100; byteNumber < bytes.size(); byteNumber++)
+		for (uint32_t byteNumber = 0; byteNumber < bytes.size(); byteNumber++)
 		{
 			Write(bytes[byteNumber], byteNumber);
 		}
@@ -1020,7 +1020,10 @@ uint8_t GameBoy::CheckCondition(uint8_t condition)
 void GameBoy::ExecuteInstruction(uint8_t opcode)
 {
 	Instruction instruction = DecodeOpcode(opcode);
-	std::cout << std::format("{:X}",programCounter - 1) << "   -->   ";
+	if (printLogs)
+	{
+		std::cout << std::format("{:X}", programCounter - 1) << "   -->   ";
+	}
 
 	switch (instruction)
 	{
@@ -1279,7 +1282,10 @@ void GameBoy::ExecuteCBInstruction()
 {
 	uint8_t opcode = ReadROMLine();
 	Instruction instruction = DecodeCBOpcode(opcode);
-	std::cout << "CB: ";
+	if (printLogs)
+	{
+		std::cout << "CB: ";
+	}
 
 	switch (instruction)
 	{
@@ -1344,8 +1350,6 @@ void GameBoy::LDH(uint8_t opcode)
 			std::cout << InstructionToString(DecodeOpcode(opcode))
 				<< std::format(" ${:X}, ",0xFF00 + offset) << RegisterToString(A) << "\n";
 		}
-
-		
 	}
 
 	if (opcode == 0xF0)
@@ -1384,8 +1388,10 @@ void GameBoy::LDtoIndirect(uint8_t opcode)
 	default:
 		_ASSERT(false);
 	}
-
-	std::cout << InstructionToString(DecodeOpcode(opcode)) << " " << reg_string << ", A" << "\n";
+	if (printLogs)
+	{
+		std::cout << InstructionToString(DecodeOpcode(opcode)) << " " << reg_string << ", A" << "\n";
+	}
 }
 
 void GameBoy::ImmediateLD16(uint8_t opcode)
@@ -2066,7 +2072,7 @@ void GameBoy::Decrement16(uint8_t opcode)
 	case 2:
 		reg_string = "HL";
 	case 3:
-		reg_string = "AF";
+		reg_string = "SP";
 	}
 
 	if (printLogs)
@@ -2347,7 +2353,10 @@ void GameBoy::FunctionReturn(uint8_t opcode)
 void GameBoy::ConditionalFunctionReturn(uint8_t opcode)
 {
 	uint8_t condition = (opcode & 0b00011000) >> 3;
-	std::cout << ConditionToString(condition) << " ";
+	if (printLogs)
+	{
+		std::cout << ConditionToString(condition) << " ";
+	}
 
 	if (CheckCondition(condition))
 	{
@@ -2365,6 +2374,10 @@ void GameBoy::CPL(uint8_t opcode)
 	SetRegister(A, ~GetRegisterValue(A));
 	SetFlag(NegativeFlag, true);
 	SetFlag(HalfCarryFlag, true);
+	if (printLogs)
+	{
+		std::cout << "CPL\n";
+	}
 }
 
 void GameBoy::SCF(uint8_t opcode)
@@ -2739,6 +2752,32 @@ void GameBoy::UpdateClock(uint32_t cycleCount)
 			}
 		}
 	}
+}
+
+void GameBoy::UpdateJoypadInput()
+{
+	uint8_t& joypad = memory[0xFF00];
+
+	/*auto setBit = [&](uint8_t num, bool state) {
+		joypad &= ~(1 << num);
+		joypad |= (uint8_t(state) << num);
+	};
+
+	bool w_pressed = (GetKeyState('W') & 0x8000);
+	bool a_pressed = (GetKeyState('A') & 0x8000);
+	bool s_pressed = (GetKeyState('S') & 0x8000);
+	bool d_pressed = (GetKeyState('D') & 0x8000);
+
+	bool shift_pressed = (GetKeyState(VK_SHIFT) & 0x8000);
+
+	setBit(0, !d_pressed);
+	setBit(1, !a_pressed);
+	setBit(2, !w_pressed);
+	setBit(3, !s_pressed);
+	setBit(4, !shift_pressed);
+	setBit(5, shift_pressed);*/
+
+	joypad = 0xFF;
 }
 
 std::string GameBoy::RegisterToString(uint8_t reg)
