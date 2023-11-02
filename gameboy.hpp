@@ -99,6 +99,9 @@ private:
 	bool haltBug = false;
 	uint64_t cpu_cycles = 0;
 	uint64_t ppu_cycles = 0;
+	bool DMA_transfer = false;
+	uint8_t DMA_start = 0;
+	uint16_t DMA_address = 0;
 
 	// real clock for emulating FPS
 	clock_t realTime = clock();
@@ -138,7 +141,7 @@ public:
 
 	uint8_t Read(uint16_t address);
 
-	void UpdateVBlank();
+	void StartDMATransfer(uint16_t address);
 
 	void WriteScanlineY(uint8_t value);
 
@@ -146,9 +149,15 @@ public:
 
 	bool CanAccessVRAM();
 
+	bool CanAccessOAM();
+
 	std::array<uint8_t, 256 * 256> DecodeTileMap();
 
+	std::array<uint8_t, 256 * 256> DecodeOAM();
+
 	std::array<uint8_t, 64> ExtractTileData(uint8_t offset);
+
+	std::array<uint8_t, 64> ExtractTileDataUnsigned(uint8_t offset);
 
 	uint8_t GetColor(uint8_t index);
 

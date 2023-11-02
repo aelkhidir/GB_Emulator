@@ -129,12 +129,11 @@ void GameBoy::Write(uint8_t value, uint16_t address)
 		return;
 	}
 
-	memory[address] = value;
-
 	if (address == 0xFF50 && value != 0x00)
 	{
 		// todo: make this reversible
 		UnmapBootRom();
+		return;
 	}
 
 	// serial transfer output to console
@@ -144,13 +143,23 @@ void GameBoy::Write(uint8_t value, uint16_t address)
 		serial_transfer << char(memory[0xFF01]);
 		serial_transfer.flush();	
 		memory[0xFF02] = 0;
+		return;
 	}
 
 	// divider register resets when written
 	if (address == 0xFF04)
 	{
 		memory[0xFF04] = 0;
+		return;
 	}
+
+	// OAM DMA transfer
+	if (address == 0xFF46 && !DMA_transfer)
+	{
+		uint16_t source_address = value * 0x100;
+		StartDMATransfer(source_address);
+	}
+	memory[address] = value;
 }
 
 // todo: conditions for correct read
@@ -161,15 +170,25 @@ uint8_t GameBoy::Read(uint16_t address)
 		return 0xFF;
 	}
 
+	if (DMA_transfer && !(address >= 0xFF80 && address <= 0xFFFE))
+	{
+		return 0x00;
+	}
+
 	if (address == 0xFF00)
 	{
-		/*return 0xFF;*/
 		UpdateJoypadInput();
 	}
 
 	return memory[address];
 }
 
+void GameBoy::StartDMATransfer(uint16_t address)
+{
+	DMA_transfer = true;
+	DMA_start = cpu_cycles;
+	DMA_address = address;
+}
 
 void GameBoy::WriteScanlineY(uint8_t value)
 {
@@ -198,6 +217,24 @@ void GameBoy::UpdatePPU(uint64_t cycleCount)
 	stat |= uint8_t(nextMode);
 	stat &= (uint8_t(nextMode) | 0b11111100);
 
+	if (nextMode == Mode::PixelTransfer)
+	{
+		// FIFO stuff
+		if (nextScanlineNumber == previousScanlineNumber)
+		{
+			// fifo stuff for this scanline
+		}
+
+		else
+		{
+			uint16_t previous_fifo_dots = 456 - (ppu_cycles % 456);
+			uint16_t next_fifo_dots = (ppu_cycles + cycleCount) % 456;
+
+			// fifo for previous scanline
+			// fifo for this scanline
+		}
+	}
+
 
 	if (previousMode != nextMode)
 	{
@@ -209,6 +246,10 @@ void GameBoy::UpdatePPU(uint64_t cycleCount)
 			|| nextMode == Mode::OAMSearch && ExtractBit(stat, 5) || nextMode == Mode::PixelTransfer && ExtractBit(stat, 6))
 		{
 			interruptRequests |= (1 << 1);
+		}
+		if (nextMode == Mode::PixelTransfer)
+		{
+			// pause rendering, discard pixels
 		}
 	}
 
@@ -262,10 +303,9 @@ void GameBoy::ExecutionLoop()
 			if (ExtractBit(memory[0xFF40], 7) && ExtractBit(memory[0xFF40], 0))
 			{
 				DrawScreen();
-				//WaitForFrameTime();
+				WaitForFrameTime();
 				ppu_cycles %= 70224;
 			}		
-
 		}
 	}
 
@@ -313,6 +353,23 @@ bool GameBoy::CanAccessVRAM()
 	}
 }
 
+bool GameBoy::CanAccessOAM()
+{
+	uint8_t screenMode = memory[0xFF41] & 0b00000011;
+
+	switch (screenMode)
+	{
+	case 0:
+	case 1:
+		return true;
+	case 2:
+	case 3:
+		return false;
+	default:
+		_ASSERTE(false);
+	}
+}
+
 void GameBoy::HandleInterrupts()
 {
 	uint8_t& interruptEnable = memory[0xFFFF];
@@ -329,7 +386,7 @@ void GameBoy::HandleInterrupts()
 	}
 
 	auto activate_interrupt = [&](uint8_t num) {
-		_ASSERTE(num < 5);
+		_ASSERTE(num < 5 && !DMA_transfer);
 		interruptRequests &= ~(1 << num);
 		IME = 0;
 
@@ -693,6 +750,54 @@ std::array<uint8_t, 256 * 256> GameBoy::DecodeTileMap()
 	return backgroundColors;
 }
 
+std::array<uint8_t, 256 * 256> GameBoy::DecodeOAM()
+{
+	
+	struct sprite
+	{
+		uint8_t Y;
+		uint8_t X;
+		uint8_t tile_index;
+		uint8_t flags;
+	};
+
+	std::vector<sprite> sprite_vec;
+	for (uint16_t address = 0xFE00; address < 0xFE9F; address += 4)
+	{
+		sprite_vec.emplace_back(memory[address], memory[address + 1], memory[address + 2], memory[address + 3]);
+	}
+
+	std::array<uint8_t, 256 * 256> sprite_colors;
+
+	// Unused space is -1
+	// todo: std optional?
+	for (auto& element : sprite_colors)
+	{
+		element = -1;
+	}
+
+	uint8_t SCY = memory[0xFF42];
+	uint8_t SCX = memory[0xFF43];
+
+	for (auto const& object : sprite_vec)
+	{
+		// Support 8x8 and 8x16 modes
+		std::array<uint8_t, 64> tileData = ExtractTileDataUnsigned(object.tile_index);
+		uint32_t baseX = SCX + object.X;
+		uint32_t baseY = SCY + object.Y;
+		for (uint32_t pixelNum = 0; pixelNum < 64; pixelNum++)
+		{
+			uint32_t offsetX = pixelNum % 8;
+			uint32_t offsetY = pixelNum / 8;
+			if (offsetY + object.Y >= 16 && offsetX + object.X >= 8)
+			{
+				sprite_colors[(baseX + offsetX - 8) + 256 * (baseY + offsetY - 16)] = GetColor(tileData[pixelNum]);
+			}	
+		}
+	}
+	return sprite_colors;
+}
+
 std::map<std::pair<uint8_t, uint8_t>, uint8_t> GameBoy::ExtractFullTileMap()
 {
 	std::map<std::pair<uint8_t, uint8_t>, uint8_t> backgroundColors;
@@ -721,6 +826,7 @@ void GameBoy::DrawScreen()
 	SDL_RenderSetLogicalSize(renderer, 160, 144);
 	SDL_RenderClear(renderer);
 
+	// Background/Window
 	for (uint8_t offsetX = 0; offsetX < 160; offsetX++)
 	{
 		for (uint8_t offsetY = 0; offsetY < 144; offsetY++)
@@ -730,6 +836,24 @@ void GameBoy::DrawScreen()
 			SDL_RenderDrawPoint(renderer, offsetX, offsetY);
 		}
 	}
+
+	// Objects
+	std::array<uint8_t, 256 * 256> objectColors = DecodeOAM();
+	for (uint8_t offsetX = 0; offsetX < 160; offsetX++)
+	{
+		for (uint8_t offsetY = 0; offsetY < 144; offsetY++)
+		{
+			uint8_t color_index = objectColors[(SCX + offsetX) + 256 * (SCY + offsetY)];
+			if (color_index == 0xff)
+			{
+				continue;
+			}
+			uint8_t color = 255 - 85 * color_index;
+			SDL_SetRenderDrawColor(renderer, color, color, color, 255);
+			SDL_RenderDrawPoint(renderer, offsetX, offsetY);
+		}
+	}
+
 	SDL_RenderPresent(renderer);
 	SDL_PumpEvents();
 }
@@ -807,6 +931,24 @@ std::array<uint8_t, 64> GameBoy::ExtractTileData(uint8_t offset)
 		uint8_t bit = 7 - (pixelNum % 8);
 		uint8_t rowNum = pixelNum / 8;
 		uint8_t paletteChoice = uint8_t(ExtractBit(memory[tileAddress + 2 * rowNum], bit)) 
+			+ uint8_t(ExtractBit(memory[tileAddress + 2 * rowNum + 1], bit) << 1);
+		colorSelect[pixelNum] = paletteChoice;
+	}
+
+	return colorSelect;
+}
+
+std::array<uint8_t, 64> GameBoy::ExtractTileDataUnsigned(uint8_t offset)
+{
+	uint8_t LCDControl = memory[0xFF40];
+	uint16_t tileAddress = 0x8000 + 16 * offset;
+	std::array<uint8_t, 64> colorSelect;
+
+	for (uint8_t pixelNum = 0; pixelNum < 64; pixelNum++)
+	{
+		uint8_t bit = 7 - (pixelNum % 8);
+		uint8_t rowNum = pixelNum / 8;
+		uint8_t paletteChoice = uint8_t(ExtractBit(memory[tileAddress + 2 * rowNum], bit))
 			+ uint8_t(ExtractBit(memory[tileAddress + 2 * rowNum + 1], bit) << 1);
 		colorSelect[pixelNum] = paletteChoice;
 	}
@@ -2602,14 +2744,24 @@ void GameBoy::FIFO::FetchPixels()
 	uint8_t LY = gameboy.memory[0xFF44];
 	uint16_t tileMapAddress = 0x9800;
 
-	if (ExtractBit(LCDControl, 3) && LY > 144)
+	// todo: and scanline x in window
+	if (ExtractBit(LCDControl, 3))
 	{
 		tileMapAddress = 0x9C00;
 	}
 
-	else if (ExtractBit(LCDControl, 6) && LY <= 144)
+	// todo: and scanline x in window
+	else if (ExtractBit(LCDControl, 6))
 	{
 		tileMapAddress = 0x9C00;
+	}
+
+	bool isWindowTile = false;
+	uint8_t X, Y;
+
+	if (isWindowTile)
+	{
+
 	}
 
 	
@@ -2701,6 +2853,15 @@ void GameBoy::UpdateClock(uint32_t cycleCount)
 	cpu_cycles += cycleCount;
 	ppu_cycles += cycleCount;
 
+	if (DMA_transfer && cpu_cycles - DMA_start > 160)
+	{
+		DMA_transfer = false;
+		for (uint16_t offset = 0; offset <  160; offset++)
+		{
+			memory[0xFE00 + offset] = memory[DMA_address + offset];
+		}
+	}
+
 	uint8_t& divider_register = memory[0xFF04];
 	uint8_t& timer_counter = memory[0xFF05];
 	uint8_t& timer_modulo = memory[0xFF06];
@@ -2771,21 +2932,35 @@ void GameBoy::UpdateJoypadInput()
 		joypad |= (uint8_t(state) << num);
 	};
 
-	bool w_pressed = (GetKeyState('W') & 0x8000);
-	bool a_pressed = (GetKeyState('A') & 0x8000);
-	bool s_pressed = (GetKeyState('S') & 0x8000);
-	bool d_pressed = (GetKeyState('D') & 0x8000);
+	bool right_pressed = (GetKeyState(VK_RIGHT) & 0x8000);
+	bool left_pressed = (GetKeyState(VK_LEFT) & 0x8000);
+	bool up_pressed = (GetKeyState(VK_UP) & 0x8000);
+	bool down_pressed = (GetKeyState(VK_DOWN) & 0x8000);
+	bool start_pressed = (GetKeyState('A') & 0x8000);
+	bool select_pressed = (GetKeyState('S') & 0x8000);
+	bool a_pressed = (GetKeyState('D') & 0x8000);
+	bool b_pressed = (GetKeyState('F') & 0x8000);
 
-	bool shift_pressed = (GetKeyState(VK_SHIFT) & 0x8000);
+	if (!ExtractBit(joypad, 4))
+	{
+		setBit(0, !right_pressed);
+		setBit(1, !left_pressed);
+		setBit(2, !up_pressed);
+		setBit(3, !down_pressed);
+	}
 
-	setBit(0, !d_pressed);
-	setBit(1, !a_pressed);
-	setBit(2, !w_pressed);
-	setBit(3, !s_pressed);
-	setBit(4, !shift_pressed);
-	setBit(5, shift_pressed);
+	else if (!ExtractBit(joypad, 5))
+	{
+		setBit(0, !start_pressed);
+		setBit(1, !select_pressed);
+		setBit(2, !a_pressed);
+		setBit(3, !b_pressed);
+	}
 
-	//std::cout << std::format("{:02X}\n", joypad);
+	else
+	{
+		joypad |= 0x0F;
+	}
 }
 
 std::string GameBoy::RegisterToString(uint8_t reg)
