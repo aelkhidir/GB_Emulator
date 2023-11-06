@@ -1,6 +1,6 @@
 #pragma once
 #define SDL_MAIN_HANDLED
-#include <cassert>
+#include<cassert>
 #include<iostream>
 #include<sstream>
 #include<fstream>
@@ -9,10 +9,11 @@
 #include<string>
 #include<array>
 #include<map>
-#include <queue>
+#include<queue>
 #include<Windows.h>
-#include <SDL.h>
-#include <cstdio>
+#include<SDL.h>
+#include<cstdio>
+#include<cstdint>
 
 constexpr auto B = 0;
 constexpr auto C = 1;
@@ -100,8 +101,15 @@ private:
 	uint64_t cpu_cycles = 0;
 	uint64_t ppu_cycles = 0;
 	bool DMA_transfer = false;
-	uint8_t DMA_start = 0;
+	uint64_t DMA_start = 0;
 	uint16_t DMA_address = 0;
+
+	// Audio
+	uint16_t ch1_length_clock = 0;
+	uint16_t ch2_length_clock = 0;
+	uint16_t div_apu_clock = 0;
+	inline static Uint8* audio_position = 0;
+	inline static Uint32 audio_length = 0;
 
 	// real clock for emulating FPS
 	clock_t realTime = clock();
@@ -147,6 +155,8 @@ public:
 
 	void UpdatePPU(uint64_t cycleCount);
 
+	void StepAPU();
+
 	bool CanAccessVRAM();
 
 	bool CanAccessOAM();
@@ -162,6 +172,10 @@ public:
 	uint8_t GetColor(uint8_t index);
 
 	void DrawScreen();
+
+	void PlayAudio();
+
+	static void AudioCallback(void* unused, Uint8* stream, int length);
 
 	void RenderTileMap();
 

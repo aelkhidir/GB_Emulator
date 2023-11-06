@@ -5,10 +5,12 @@ void GameBoy::Reset()
 	programCounter = 0x0000;
 	stackPointer = 0x0000;
 	SDL_Init(SDL_INIT_VIDEO);
+	SDL_Init(SDL_INIT_AUDIO);
 	SDL_CreateWindowAndRenderer(800, 720, 0, &window, &renderer);
 	SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
 	SDL_RenderClear(renderer);
 	SDL_PumpEvents();
+	//PlayAudio();
 }
 
 void GameBoy::SetToPostBootState()
@@ -19,6 +21,8 @@ void GameBoy::SetToPostBootState()
 	{
 		UnmapBootRom();
 	}
+
+	Reset();
 
 	// Set the states of each register correctly
 	registerA = 0x01;
@@ -113,6 +117,7 @@ uint8_t GetLowByte(uint16_t value)
 
 void GameBoy::Write(uint8_t value, uint16_t address)
 {
+	UpdateClock(4);
 	// Cartridge memory
 	if (address >= 0x0000 && address <= 0x7FFF)
 	{
@@ -165,6 +170,8 @@ void GameBoy::Write(uint8_t value, uint16_t address)
 // todo: conditions for correct read
 uint8_t GameBoy::Read(uint16_t address)
 {
+	UpdateClock(4);
+
 	if (address >= 0xFEA0 && address <= 0xFEFF)
 	{
 		return 0xFF;
@@ -192,8 +199,7 @@ void GameBoy::StartDMATransfer(uint16_t address)
 
 void GameBoy::WriteScanlineY(uint8_t value)
 {
-	// todo: check for access rights
-	Write(value, 0xFF44);
+	memory[0xFF44] = value;
 }
 
 void GameBoy::UpdatePPU(uint64_t cycleCount)
@@ -201,7 +207,8 @@ void GameBoy::UpdatePPU(uint64_t cycleCount)
 	uint64_t previousScanlineNumber = ppu_cycles / 456;
 	uint64_t nextScanlineNumber = (ppu_cycles + cycleCount) / 456;
 
-	Mode previousMode = CalculatePPUMode();
+	uint8_t& stat = memory[0xFF41];
+	Mode previousMode = Mode(stat & 0b11);
 	Mode nextMode = CalculatePPUMode(cycleCount);
 
 	uint8_t& control = memory[0xFF40];
@@ -211,29 +218,11 @@ void GameBoy::UpdatePPU(uint64_t cycleCount)
 		return;
 	}
 
-	uint8_t& stat = memory[0xFF41];
-	uint8_t& interruptRequests = memory[0xFF0F];
 	
+	uint8_t& interruptRequests = memory[0xFF0F];
+
+	stat &= 0b11111100;
 	stat |= uint8_t(nextMode);
-	stat &= (uint8_t(nextMode) | 0b11111100);
-
-	if (nextMode == Mode::PixelTransfer)
-	{
-		// FIFO stuff
-		if (nextScanlineNumber == previousScanlineNumber)
-		{
-			// fifo stuff for this scanline
-		}
-
-		else
-		{
-			uint16_t previous_fifo_dots = 456 - (ppu_cycles % 456);
-			uint16_t next_fifo_dots = (ppu_cycles + cycleCount) % 456;
-
-			// fifo for previous scanline
-			// fifo for this scanline
-		}
-	}
 
 
 	if (previousMode != nextMode)
@@ -247,17 +236,13 @@ void GameBoy::UpdatePPU(uint64_t cycleCount)
 		{
 			interruptRequests |= (1 << 1);
 		}
-		if (nextMode == Mode::PixelTransfer)
-		{
-			// pause rendering, discard pixels
-		}
 	}
 
 	if (nextScanlineNumber != previousScanlineNumber)
 	{
 		uint8_t LY = memory[0xFF44];
 		uint8_t LYC = memory[0xFF45];
-		WriteScanlineY(LY + nextScanlineNumber - previousScanlineNumber);
+		WriteScanlineY(nextScanlineNumber);
 
 		if (LY == LYC)
 		{
@@ -273,6 +258,111 @@ void GameBoy::UpdatePPU(uint64_t cycleCount)
 			stat &= ~(1 << 2);
 		}
 	}
+}
+
+void GameBoy::StepAPU()
+{
+	uint8_t& control = memory[0xFF26];
+	uint8_t& panning = memory[0xFF25];
+	uint8_t& volume_and_vin_panning = memory[0xFF24];
+
+	uint8_t& ch1_sweep = memory[0xFF10];
+	uint8_t& ch1_timer = memory[0xFF11];
+	uint8_t& ch1_volume = memory[0xFF12];
+	uint8_t& ch1_period_low = memory[0xFF13];
+	uint8_t& ch1_period_high = memory[0xFF14];
+
+	uint8_t& ch2_timer = memory[0xFF16];
+	uint8_t& ch2_volume = memory[0xFF17];
+	uint8_t& ch2_period_low = memory[0xFF18];
+	uint8_t& ch2_period_high = memory[0xFF19];
+
+	uint8_t& ch3_dac_enable = memory[0xFF1A];
+	uint8_t& ch3_timer = memory[0xFF1B];
+	uint8_t& ch3_output_level = memory[0xFF1C];
+	uint8_t& ch3_period_low = memory[0xFF1D];
+	uint8_t& ch3_period_high = memory[0xFF1E];
+
+	uint8_t& ch4_timer = memory[0xFF20];
+	uint8_t& ch4_volume = memory[0xFF21];
+	uint8_t& ch4_frequency = memory[0xFF22];
+	uint8_t& ch4_control = memory[0xFF23];
+
+	// If off, clear all registers and do nothing
+	if (!ExtractBit(control, 7))
+	{
+		for (uint16_t i = 0xFF10; i < 0xFF24; i++)
+		{
+			if (i == 0xFF15 || i == 0xFF1F)
+			{
+				continue;
+			}
+			memory[i] = 0;
+		}
+		return;
+	}
+
+	// Channel 1 sound
+	if (ExtractBit(control, 0))
+	{
+		uint8_t ch1_pace = (ch1_sweep & (0b01110000)) >> 4;
+		uint8_t ch1_direction = ExtractBit(ch1_sweep, 3);
+
+		// Period sweep
+		if (ch1_pace != 0 && div_apu_clock % (4 * ch1_pace) == 0)
+		{
+			uint8_t ch1_step = (ch1_sweep & 0b00000111);
+			uint16_t ch1_period = ch1_period_low + ((ch1_period_high & 0b00000111) << 8);
+			uint16_t ch1_period_change = ch1_period / (ldexp(1, ch1_step));
+			ch1_period = ch1_direction ? ch1_period - ch1_period_change : ch1_period + ch1_period_change;
+			if (ch1_period > 0x7FF)
+			{
+				control &= ~1;
+			}
+			else
+			{
+				ch1_period_low = (ch1_period & 0xff);
+				ch1_period_high = (ch1_period & 0b11100000000) >> 8;
+			}
+		}
+		
+
+		// duty cycle (fraction out of 8)
+		uint8_t wave_duty;
+		switch ((ch1_timer & 0b11000000) >> 6)
+		{
+		case 0:
+			wave_duty = 1;
+		case 1:
+			wave_duty = 2;
+		case 2:
+			wave_duty = 4;
+		case 3:
+			wave_duty = 6;
+		}
+
+	}
+	
+	// Channel 2
+	if (ExtractBit(control, 1))
+	{
+
+	}
+
+	// Channel 3
+	if (ExtractBit(control, 2))
+	{
+
+	}
+
+	// Channel 4
+	if (ExtractBit(control, 3))
+	{
+
+	}
+	
+
+
 }
 
 void GameBoy::ExecutionLoop()
@@ -338,6 +428,11 @@ void GameBoy::PointToCartridgeMemory()
 
 bool GameBoy::CanAccessVRAM()
 {
+	uint8_t& LCD_control = memory[0xFF40];
+	if (!ExtractBit(LCD_control, 7))
+	{
+		return true;
+	}
 	uint8_t screenMode = memory[0xFF41] & 0b00000011;
 
 	switch (screenMode)
@@ -752,7 +847,6 @@ std::array<uint8_t, 256 * 256> GameBoy::DecodeTileMap()
 
 std::array<uint8_t, 256 * 256> GameBoy::DecodeOAM()
 {
-	
 	struct sprite
 	{
 		uint8_t Y;
@@ -831,7 +925,7 @@ void GameBoy::DrawScreen()
 	{
 		for (uint8_t offsetY = 0; offsetY < 144; offsetY++)
 		{
-			uint8_t color = 255 - 85 * backgroundColors[(SCX + offsetX) + 256 *  (SCY + offsetY )];
+			uint8_t color = 255 - 85 * backgroundColors[((SCX + offsetX) % 256) + 256 * ((SCY + offsetY) % 256)];
 			SDL_SetRenderDrawColor(renderer, color, color, color, 255);
 			SDL_RenderDrawPoint(renderer, offsetX, offsetY);
 		}
@@ -843,7 +937,7 @@ void GameBoy::DrawScreen()
 	{
 		for (uint8_t offsetY = 0; offsetY < 144; offsetY++)
 		{
-			uint8_t color_index = objectColors[(SCX + offsetX) + 256 * (SCY + offsetY)];
+			uint8_t color_index = objectColors[((SCX + offsetX) % 256) + 256 * ((SCY + offsetY) % 256)];
 			if (color_index == 0xff)
 			{
 				continue;
@@ -856,6 +950,46 @@ void GameBoy::DrawScreen()
 
 	SDL_RenderPresent(renderer);
 	SDL_PumpEvents();
+}
+
+void GameBoy::PlayAudio()
+{
+	SDL_AudioSpec wav_spec;
+	Uint8* wav_buffer;
+	Uint32 wav_length;	
+
+	_ASSERTE(SDL_LoadWAV("guitar_loop.wav", &wav_spec, &wav_buffer, &wav_length));
+
+	wav_spec.callback = AudioCallback;
+	wav_spec.userdata = NULL;
+
+	audio_position = wav_buffer;
+	audio_length = wav_length;
+
+	_ASSERTE(SDL_OpenAudio(&wav_spec, NULL) >= 0);
+	SDL_PauseAudio(0);
+
+	// wait until we're don't playing
+	while (audio_length > 0) {
+		SDL_Delay(100);
+	}
+
+	SDL_CloseAudio();
+	SDL_FreeWAV(wav_buffer);
+}
+
+void GameBoy::AudioCallback(void* unused, Uint8* stream, int length)
+{
+	if (audio_length == 0)
+	{
+		return;
+	}
+	memset(stream, 0, length);
+	length = (length > audio_length ? audio_length : length);
+	SDL_MixAudio(stream, audio_position, length, SDL_MIX_MAXVOLUME / 8);
+
+	audio_position += length;
+	audio_length -= length;
 }
 
 void GameBoy::DrawFullBackground()
@@ -965,14 +1099,15 @@ uint8_t GameBoy::ReadROMLine()
 void GameBoy::Push(uint8_t value)
 {
 	stackPointer--;
-	Write(value, stackPointer);
 	UpdateClock(4);
+	Write(value, stackPointer);
 }
 
 void GameBoy::Push16(uint8_t opcode)
 {
 	uint16_t value;
 	std::string reg_string;
+	UpdateClock(4);
 
 	switch (opcode)
 	{
@@ -1068,7 +1203,7 @@ uint8_t GameBoy::GetRegisterValue(uint8_t num)
 	case L:
 		return registerL;
 	case HL:
-		return memory[Get16BitRegisterValue(HL16)];
+		return Read(Get16BitRegisterValue(HL16));
 	case A:
 		return registerA;
 	}
@@ -1078,7 +1213,6 @@ uint8_t GameBoy::GetRegisterValue(uint8_t num)
 
 uint16_t GameBoy::Get16BitRegisterValue(uint8_t num)
 {
-	UpdateClock(4);
 	switch (num)
 	{
 	case BC16:
@@ -1565,20 +1699,20 @@ void GameBoy::IndirectLD(uint8_t opcode)
 	switch (opcode)
 	{
 	case 0x0A:
-		registerA = memory[Get16BitRegisterValue(BC16)];
+		registerA = Read(Get16BitRegisterValue(BC16));
 		reg_string = "(BC)";
 		break;
 	case 0x1A:
-		registerA = memory[Get16BitRegisterValue(DE16)];
+		registerA = Read(Get16BitRegisterValue(DE16));
 		reg_string = "(DE)";
 		break;
 	case 0x2A:
-		registerA = memory[Get16BitRegisterValue(HL16)];
+		registerA = Read(Get16BitRegisterValue(HL16));
 		Set16BitRegister(HL16, Get16BitRegisterValue(HL16) + 1);
 		reg_string = "(HL+)";
 		break;
 	case 0x3A:
-		registerA = memory[Get16BitRegisterValue(HL16)];
+		registerA = Read(Get16BitRegisterValue(HL16));
 		Set16BitRegister(HL16, Get16BitRegisterValue(HL16) - 1);
 		reg_string = "(HL-)";
 		break;
@@ -1620,7 +1754,6 @@ void GameBoy::LDtoAddress(uint8_t opcode)
 	uint8_t msb = ReadROMLine();
 	uint16_t address = (uint16_t(msb) << 8) + lsb;
 	Write(registerA, address);
-	UpdateClock(4);
 
 	if (printLogs)
 	{
@@ -1635,7 +1768,6 @@ void GameBoy::LDStackPointertoAddress(uint8_t opcode)
 	uint16_t address = (uint16_t(msb) << 8) + lsb;
 	Write(GetLowByte(stackPointer), address);
 	Write(GetHighByte(stackPointer), address + 1);
-	UpdateClock(8);
 
 	if (printLogs)
 	{
@@ -1649,8 +1781,7 @@ void GameBoy::LDfromAddress(uint8_t opcode)
 	uint8_t lsb = ReadROMLine();
 	uint8_t msb = ReadROMLine();
 	uint16_t address = (uint16_t(msb) << 8) + lsb;
-	SetRegister(A, memory[address]);
-	UpdateClock(4);
+	SetRegister(A, Read(address));
 
 	if (printLogs)
 	{
@@ -2108,7 +2239,6 @@ void GameBoy::DAA(uint8_t opcode)
 
 	SetFlag(ZeroFlag, registerA == 0);
 	SetFlag(HalfCarryFlag, false);
-	UpdateClock(4);
 
 	if (printLogs)
 	{
@@ -2130,7 +2260,6 @@ void GameBoy::SBCImmediate(uint8_t opcode)
 	SetFlag(NegativeFlag, 1);
 	SetFlag(HalfCarryFlag, halfCarry);
 	SetFlag(CarryFlag, result > 0xFF);
-	UpdateClock(4);
 
 	if (printLogs)
 	{
@@ -2180,6 +2309,7 @@ void GameBoy::Increment16(uint8_t opcode)
 	uint8_t reg = (opcode & 0b00110000) >> 4;
 	uint16_t value = Get16BitRegisterValue(reg);
 	Set16BitRegister(reg, value + 1);
+	UpdateClock(4);
 
 	if (printLogs)
 	{
@@ -2212,6 +2342,7 @@ void GameBoy::Decrement16(uint8_t opcode)
 	uint16_t value = Get16BitRegisterValue(reg);
 	std::string reg_string;
 	Set16BitRegister(reg, value - 1);
+	UpdateClock(4);
 
 	switch (reg)
 	{
@@ -2550,8 +2681,6 @@ void GameBoy::InterruptReturn(uint8_t opcode)
 {
 	IME = 1;
 	FunctionReturn(opcode);
-
-	UpdateClock(12);
 	
 	if (printLogs)
 	{
@@ -2576,9 +2705,7 @@ void GameBoy::Restart(uint8_t opcode)
 
 void GameBoy::Halt(uint8_t opcode)
 {
-	haltMode = true;
-	UpdateClock(4);
-	
+	haltMode = true;	
 	if (printLogs)
 	{
 		PrintInstruction(DecodeOpcode(opcode));
@@ -2627,8 +2754,6 @@ void GameBoy::Bit(uint8_t opcode)
 	SetFlag(NegativeFlag, 0);
 	SetFlag(HalfCarryFlag, 1);
 
-	UpdateClock(4);
-
 	if (printLogs)
 	{
 		PrintImmediateInstruction(DecodeCBOpcode(opcode), bit, reg);
@@ -2646,8 +2771,6 @@ void GameBoy::SLA(uint8_t opcode)
 	SetFlag(ZeroFlag, newValue == 0);
 	SetFlag(NegativeFlag, 0);
 	SetFlag(HalfCarryFlag, 0);
-
-	UpdateClock(4);
 
 	if (printLogs)
 	{
@@ -2667,8 +2790,6 @@ void GameBoy::SRA(uint8_t opcode)
 	SetFlag(NegativeFlag, 0);
 	SetFlag(HalfCarryFlag, 0);
 
-	UpdateClock(4);
-
 	if (printLogs)
 	{
 		PrintInstruction(DecodeCBOpcode(opcode), reg);
@@ -2682,7 +2803,6 @@ void GameBoy::SET(uint8_t opcode)
 	uint8_t oldValue = GetRegisterValue(reg);
 	uint8_t newValue = oldValue | (1 << bit);
 	SetRegister(reg, newValue);
-	UpdateClock(4);
 
 	if (printLogs)
 	{
@@ -2697,7 +2817,6 @@ void GameBoy::RES(uint8_t opcode)
 	uint8_t oldValue = GetRegisterValue(reg);
 	uint8_t newValue = oldValue & (~(1 << bit));
 	SetRegister(reg, newValue);
-	UpdateClock(4);
 
 	if (printLogs)
 	{
@@ -2719,8 +2838,6 @@ void GameBoy::SWAP(uint8_t opcode)
 	SetFlag(NegativeFlag, 0);
 	SetFlag(HalfCarryFlag, 0);
 
-	UpdateClock(4);
-
 	if (printLogs)
 	{
 		PrintInstruction(DecodeCBOpcode(opcode), reg);
@@ -2729,8 +2846,6 @@ void GameBoy::SWAP(uint8_t opcode)
 
 void GameBoy::Nop(uint8_t opcode)
 {
-	UpdateClock(4);
-
 	if (printLogs)
 	{
 		std::cout << "Nop\n";
@@ -2850,8 +2965,9 @@ void GameBoy::UpdateClock(uint32_t cycleCount)
 {
 	// todo: other stuff that needs updating
 	UpdatePPU(cycleCount);
-	cpu_cycles += cycleCount;
 	ppu_cycles += cycleCount;
+	cpu_cycles += cycleCount;
+	
 
 	if (DMA_transfer && cpu_cycles - DMA_start > 160)
 	{
@@ -2868,15 +2984,25 @@ void GameBoy::UpdateClock(uint32_t cycleCount)
 	uint8_t& timer_control = memory[0xFF07];
 	uint8_t& interrupt_requests = memory[0xFF0F];
 
-	if (systemClockActive)
+
+	uint8_t previous_div = divider_register;
+	div_clock += cycleCount;
+	if (div_clock > 256)
 	{
-		div_clock += cycleCount;
-		if (div_clock > 256)
+		div_clock -= 256;
+		divider_register++;
+
+		// DIV-APU clock increments on falling edges of bit 4
+		if (ExtractBit(previous_div, 4) && !ExtractBit(divider_register, 4))
 		{
-			div_clock -= 256;
-			divider_register++;
+			div_apu_clock++;
+			if ((div_apu_clock % 2) == 0)
+			{
+				/*StepAPU();*/
+			}
 		}
 	}
+	
 
 	auto increment_timer = [&]() {
 		if (timer_counter == 0xFF)
