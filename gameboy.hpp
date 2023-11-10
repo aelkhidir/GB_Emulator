@@ -93,8 +93,9 @@ private:
 	bool IME = 0;
 	bool systemClockActive = 1;
 	bool mainClockActive = 1;
-	uint64_t timer_clock = 0;
-	uint64_t div_clock = 0;
+	uint16_t div_clock = 0;
+	bool previous_timer_control = false;
+	
 
 	bool haltMode = false;
 	bool haltBug = false;
@@ -103,6 +104,7 @@ private:
 	bool DMA_transfer = false;
 	uint64_t DMA_start = 0;
 	uint16_t DMA_address = 0;
+	uint8_t previous_joypad = 0;
 
 	// Audio
 	uint16_t ch1_length_clock = 0;
@@ -124,7 +126,7 @@ private:
 	FIFO spriteFifo = FIFO(*this);
 
 	// Options 
-	bool printLogs = false;
+	bool printLogs = true;
 
 	// Serial Transfer Stream
 	std::ofstream serial_transfer;
@@ -141,7 +143,7 @@ public:
 
 	void WaitForFrameTime();
 
-	void HandleInterrupts();
+	bool HandleInterrupts();
 
 	void PointToCartridgeMemory();
 
@@ -274,6 +276,8 @@ public:
 	void PrintInstruction16(Instruction instruction, uint8_t reg1=0xFF, uint8_t reg2=0xFF);
 
 	void PrintImmediateInstruction(Instruction instruction, uint16_t immediateValue, uint8_t reg1=0xFF);
+
+	void PrintImmediateInstruction16(Instruction instruction, uint16_t immediateValue, uint8_t reg1=0xFF);
 
 	void PrintImmediateInstructionReversed(Instruction instruction, uint16_t immediateValue, uint8_t reg1=0xFF);
 

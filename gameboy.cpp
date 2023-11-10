@@ -15,7 +15,7 @@ void GameBoy::Reset()
 
 void GameBoy::SetToPostBootState()
 {
-	bool unmapBootRom = false;
+	bool unmapBootRom = true;
 
 	if (unmapBootRom)
 	{
@@ -100,7 +100,7 @@ void GameBoy::SetToPostBootState()
 	ppu_cycles = 0;
 }
 
-bool ExtractBit(uint8_t value, uint8_t bit)
+bool ExtractBit(uint16_t value, uint8_t bit)
 {
 	return (value >> bit) & 0x01;
 }
@@ -155,6 +155,7 @@ void GameBoy::Write(uint8_t value, uint16_t address)
 	if (address == 0xFF04)
 	{
 		memory[0xFF04] = 0;
+		div_clock = 0;
 		return;
 	}
 
@@ -164,6 +165,7 @@ void GameBoy::Write(uint8_t value, uint16_t address)
 		uint16_t source_address = value * 0x100;
 		StartDMATransfer(source_address);
 	}
+
 	memory[address] = value;
 }
 
@@ -215,6 +217,9 @@ void GameBoy::UpdatePPU(uint64_t cycleCount)
 
 	if (!ExtractBit(control, 7))
 	{
+		WriteScanlineY(0);
+		ppu_cycles = 0;
+		stat &= 0b11111100;
 		return;
 	}
 
@@ -258,6 +263,8 @@ void GameBoy::UpdatePPU(uint64_t cycleCount)
 			stat &= ~(1 << 2);
 		}
 	}
+
+	ppu_cycles += cycleCount;
 }
 
 void GameBoy::StepAPU()
@@ -369,12 +376,15 @@ void GameBoy::ExecutionLoop()
 {
 	while (true)
 	{
-		/*if (!haltMode)
+		if (!haltMode)
 		{
 			LogCPUState();
-		}*/
-		
-		HandleInterrupts();
+		}
+
+		if (HandleInterrupts())
+		{
+			LogCPUState();
+		}
 
 		uint16_t previousPC = programCounter;
 		if (!haltMode)
@@ -465,7 +475,7 @@ bool GameBoy::CanAccessOAM()
 	}
 }
 
-void GameBoy::HandleInterrupts()
+bool GameBoy::HandleInterrupts()
 {
 	uint8_t& interruptEnable = memory[0xFFFF];
 	uint8_t& interruptRequests = memory[0xFF0F];
@@ -474,8 +484,9 @@ void GameBoy::HandleInterrupts()
 	// Todo: halt should be disabled as soon as an interrupt is pending (not necessarily handled)
 
 	uint8_t interrupts = interruptEnable & interruptRequests;
+	bool interrupt_handled = false;
 
-	if (interrupts)
+	if (interrupts && haltMode)
 	{
 		haltMode = 0;
 	}
@@ -484,13 +495,12 @@ void GameBoy::HandleInterrupts()
 		_ASSERTE(num < 5 && !DMA_transfer);
 		interruptRequests &= ~(1 << num);
 		IME = 0;
-
+		UpdateClock(8);
 		Push(GetHighByte(programCounter));
 		Push(GetLowByte(programCounter));
 		uint8_t interruptVector = 0x40 + num * 0x8;
-		programCounter = interruptVector;
-				
-		UpdateClock(20); // Todo: Add halt mode factor
+		SetProgramCounter(interruptVector);
+		interrupt_handled = true;
 	};
 
 
@@ -503,6 +513,8 @@ void GameBoy::HandleInterrupts()
 			break;
 		}
 	}
+
+	return interrupt_handled;
 }
 
 Instruction GameBoy::DecodeOpcode(uint8_t opcode)
@@ -1099,7 +1111,6 @@ uint8_t GameBoy::ReadROMLine()
 void GameBoy::Push(uint8_t value)
 {
 	stackPointer--;
-	UpdateClock(4);
 	Write(value, stackPointer);
 }
 
@@ -1142,9 +1153,8 @@ void GameBoy::Push16(uint8_t opcode)
 
 uint8_t GameBoy::Pop()
 {
-	uint8_t result = memory[stackPointer];
+	uint8_t result = Read(stackPointer);
 	stackPointer++;
-	UpdateClock(4);
 	return result;
 }
 
@@ -1688,7 +1698,7 @@ void GameBoy::ImmediateLD16(uint8_t opcode)
 
 	if (printLogs)
 	{
-		PrintImmediateInstruction(DecodeOpcode(opcode), immediateValue, reg);
+		PrintImmediateInstruction16(DecodeOpcode(opcode), immediateValue, reg);
 	}
 }
 
@@ -1865,6 +1875,7 @@ void GameBoy::Add16(uint8_t opcode)
 	SetFlag(NegativeFlag, 0);
 	SetFlag(HalfCarryFlag, halfCarry);
 	SetFlag(CarryFlag, uint32_t(HLValue) + uint32_t(regValue) > 0xFFFF);
+	UpdateClock(4);
 
 	if (printLogs)
 	{
@@ -1897,7 +1908,7 @@ void GameBoy::ImmediateAddToStackPointer(uint8_t opcode)
 	int8_t offset = ReadROMLine();
 	uint16_t oldStackPointer = stackPointer;
 	stackPointer += offset;
-
+	
 	bool halfCarry = ((oldStackPointer & 0xF) + (offset & 0xF)) & 0x10;
 	bool carry = ((oldStackPointer & 0xFF) + uint8_t(offset)) > 0xFF;
 
@@ -1905,7 +1916,7 @@ void GameBoy::ImmediateAddToStackPointer(uint8_t opcode)
 	SetFlag(NegativeFlag, 0);
 	SetFlag(HalfCarryFlag, halfCarry);
 	SetFlag(CarryFlag, carry);
-
+	UpdateClock(8);
 
 	if (printLogs)
 	{
@@ -2101,8 +2112,14 @@ void GameBoy::RotateRightAccumulator(uint8_t opcode)
 void GameBoy::RotateLeft(uint8_t opcode)
 {
 	uint8_t reg = opcode & 0b00000111;
-	RotateLeftThroughCarry(reg);
-	SetFlag(ZeroFlag, GetRegisterValue(reg) == 0);
+	
+	uint8_t oldValue = GetRegisterValue(reg);
+	bool oldCarry = GetFlag(CarryFlag);
+	uint8_t newValue = (oldValue << 1) + uint8_t(oldCarry);
+
+	SetFlag(CarryFlag, ExtractBit(oldValue, 7));
+	SetRegister(reg, newValue);
+	SetFlag(ZeroFlag, newValue == 0);
 	SetFlag(NegativeFlag, 0);
 	SetFlag(HalfCarryFlag, 0);
 
@@ -2115,8 +2132,14 @@ void GameBoy::RotateLeft(uint8_t opcode)
 void GameBoy::RotateRight(uint8_t opcode)
 {
 	uint8_t reg = opcode & 0b00000111;
-	RotateRightThroughCarry(reg);
-	SetFlag(ZeroFlag, GetRegisterValue(reg) == 0);
+	uint8_t oldValue = GetRegisterValue(reg);
+
+	bool oldCarry = GetFlag(CarryFlag);
+	uint8_t newValue = (oldValue >> 1) + (uint8_t(oldCarry) << 7);
+
+	SetFlag(CarryFlag, ExtractBit(oldValue, 0));
+	SetRegister(reg, newValue);
+	SetFlag(ZeroFlag, newValue == 0);
 	SetFlag(NegativeFlag, 0);
 	SetFlag(HalfCarryFlag, 0);
 
@@ -2130,26 +2153,29 @@ void GameBoy::RotateLeftThroughCarry(uint8_t reg)
 {
 	uint8_t oldValue = GetRegisterValue(reg);
 	bool oldCarry = GetFlag(CarryFlag);
+	uint8_t newValue = (oldValue << 1) + uint8_t(oldCarry);
 	SetFlag(CarryFlag, ExtractBit(oldValue, 7));
-	SetRegister(reg, (oldValue << 1) + uint8_t(oldCarry));
+	SetRegister(reg, newValue);
 }
 
 void GameBoy::RotateRightThroughCarry(uint8_t reg)
 {
 	uint8_t oldValue = GetRegisterValue(reg);
 	bool oldCarry = GetFlag(CarryFlag);
+	uint8_t newValue = (oldValue >> 1) + (uint8_t(oldCarry) << 7);
 	SetFlag(CarryFlag, ExtractBit(oldValue, 0));
-	SetRegister(reg, (oldValue >> 1) + (uint8_t(oldCarry) << 7));
+	SetRegister(reg, newValue);
 }
 
 void GameBoy::RotateLeftCircular(uint8_t opcode)
 {
 	uint8_t reg = opcode & 0b00000111;
 	uint8_t oldValue = GetRegisterValue(reg);
+	uint8_t newValue = std::rotl(oldValue, 1);
 
 	SetFlag(CarryFlag, ExtractBit(oldValue, 7));
-	SetRegister(reg, std::rotl(oldValue, 1));
-	SetFlag(ZeroFlag, GetRegisterValue(reg) == 0);
+	SetRegister(reg, newValue);
+	SetFlag(ZeroFlag, newValue == 0);
 	SetFlag(NegativeFlag, 0);
 	SetFlag(HalfCarryFlag, 0);
 	
@@ -2163,10 +2189,11 @@ void GameBoy::RotateRightCircular(uint8_t opcode)
 {
 	uint8_t reg = opcode & 0b00000111;
 	uint8_t oldValue = GetRegisterValue(reg);
+	uint8_t newValue = std::rotr(oldValue, 1);
 
 	SetFlag(CarryFlag, ExtractBit(oldValue, 0));
-	SetRegister(reg, std::rotr(oldValue, 1));
-	SetFlag(ZeroFlag, GetRegisterValue(reg) == 0);
+	SetRegister(reg, newValue);
+	SetFlag(ZeroFlag, newValue == 0);
 	SetFlag(NegativeFlag, 0);
 	SetFlag(HalfCarryFlag, 0);
 
@@ -2526,7 +2553,8 @@ void GameBoy::Jump(uint8_t opcode)
 
 void GameBoy::JumpToHL(uint8_t opcode)
 {
-	SetProgramCounter(Get16BitRegisterValue(HL16));
+	// No PC write delay
+	programCounter = Get16BitRegisterValue(HL16);
 	
 	if (printLogs)
 	{
@@ -2634,6 +2662,7 @@ void GameBoy::FunctionReturn(uint8_t opcode)
 void GameBoy::ConditionalFunctionReturn(uint8_t opcode)
 {
 	uint8_t condition = (opcode & 0b00011000) >> 3;
+	UpdateClock(4);
 	if (printLogs)
 	{
 		std::cout << ConditionToString(condition) << " ";
@@ -2965,11 +2994,10 @@ void GameBoy::UpdateClock(uint32_t cycleCount)
 {
 	// todo: other stuff that needs updating
 	UpdatePPU(cycleCount);
-	ppu_cycles += cycleCount;
 	cpu_cycles += cycleCount;
 	
 
-	if (DMA_transfer && cpu_cycles - DMA_start > 160)
+	if (DMA_transfer && cpu_cycles - DMA_start > 640)
 	{
 		DMA_transfer = false;
 		for (uint16_t offset = 0; offset <  160; offset++)
@@ -2984,14 +3012,12 @@ void GameBoy::UpdateClock(uint32_t cycleCount)
 	uint8_t& timer_control = memory[0xFF07];
 	uint8_t& interrupt_requests = memory[0xFF0F];
 
-
 	uint8_t previous_div = divider_register;
+	uint16_t previous_div_clock = div_clock;
 	div_clock += cycleCount;
-	if (div_clock > 256)
+	divider_register = GetHighByte(div_clock);
+	if (divider_register != previous_div)
 	{
-		div_clock -= 256;
-		divider_register++;
-
 		// DIV-APU clock increments on falling edges of bit 4
 		if (ExtractBit(previous_div, 4) && !ExtractBit(divider_register, 4))
 		{
@@ -3016,37 +3042,48 @@ void GameBoy::UpdateClock(uint32_t cycleCount)
 		}
 	};
 
-	if (ExtractBit(timer_control, 2))
+	switch (timer_control & 0b11)
 	{
-		timer_clock += cycleCount;
-		switch (timer_control & 0b11)
+	case 0:
+	{
+		// clock / 1024
+		if ((ExtractBit(previous_div_clock, 9) && previous_timer_control) && !(ExtractBit(div_clock, 9) && ExtractBit(timer_control, 2)))
 		{
-		case 0:
-			if (timer_clock > 1024)
-			{
-				timer_clock -= 1024;
-				increment_timer();
-			}
-		case 1:
-			if (timer_clock > 16)
-			{
-				timer_clock -= 16;
-				increment_timer();
-			}
-		case 2:
-			if (timer_clock > 64)
-			{
-				timer_clock -= 64;
-				increment_timer();
-			}
-		case 3:
-			if (timer_clock > 256)
-			{
-				timer_clock -= 256;
-				increment_timer();
-			}
+			increment_timer();
 		}
+		break;
 	}
+		
+	case 1:
+	{
+		// clock / 16
+		if ((ExtractBit(previous_div_clock, 3) && previous_timer_control) && !(ExtractBit(div_clock, 3) && ExtractBit(timer_control, 2)))
+		{
+			increment_timer();
+		}
+		break;
+	}
+	case 2:
+	{
+		// clock / 64
+		if ((ExtractBit(previous_div_clock, 5) && previous_timer_control) && !(ExtractBit(div_clock, 5) && ExtractBit(timer_control, 2)))
+		{
+			increment_timer();
+		}
+		break;
+	}
+	case 3:
+	{
+		// clock / 256
+		if ((ExtractBit(previous_div_clock, 7) && previous_timer_control) && !(ExtractBit(div_clock, 7) && ExtractBit(timer_control, 2)))
+		{
+			increment_timer();
+		}
+		break;
+	}
+	}
+	
+	previous_timer_control = ExtractBit(timer_control, 2);
 }
 
 void GameBoy::UpdateJoypadInput()
@@ -3087,6 +3124,31 @@ void GameBoy::UpdateJoypadInput()
 	{
 		joypad |= 0x0F;
 	}
+
+	uint8_t& interruptRequests = memory[0xFF0F];
+
+	// Falling edges trigger the joypad interrupt
+	if (ExtractBit(previous_joypad, 0) && !ExtractBit(joypad, 0))
+	{
+		interruptRequests |= (1 << 4);
+	}
+
+	else if (ExtractBit(previous_joypad, 1) && !ExtractBit(joypad, 1))
+	{
+		interruptRequests |= (1 << 4);
+	}
+
+	else if (ExtractBit(previous_joypad, 2) && !ExtractBit(joypad, 2))
+	{
+		interruptRequests |= (1 << 4);
+	}
+
+	else if (ExtractBit(previous_joypad, 3) && !ExtractBit(joypad, 3))
+	{
+		interruptRequests |= (1 << 4);
+	}
+
+	previous_joypad = joypad;
 }
 
 std::string GameBoy::RegisterToString(uint8_t reg)
@@ -3310,6 +3372,14 @@ void GameBoy::PrintImmediateInstruction(Instruction instruction, uint16_t immedi
 	std::cout << instruction_string << " " << reg1_string << std::format("${:X}", immediateValue) << "\n";
 }
 
+void GameBoy::PrintImmediateInstruction16(Instruction instruction, uint16_t immediateValue, uint8_t reg1)
+{
+	std::string instruction_string = InstructionToString(instruction);
+	std::string reg1_string = reg1 == 0xFF ? "" : RegisterToString16(reg1) + ", ";
+
+	std::cout << instruction_string << " " << reg1_string << std::format("${:X}", immediateValue) << "\n";
+}
+
 void GameBoy::PrintImmediateInstructionReversed(Instruction instruction, uint16_t immediateValue, uint8_t reg1)
 {
 	std::string instruction_string = InstructionToString(instruction);
@@ -3337,9 +3407,9 @@ std::string GameBoy::ConditionToString(uint8_t condition)
 
 void GameBoy::LogCPUState()
 {
-	cpu_state << std::format("A:{:02X} F:{:02X} B:{:02X} C:{:02X} D:{:02X} E:{:02X} H:{:02X} L:{:02X} SP:{:04X} PC:{:04X} PCMEM:{:02X},{:02X},{:02X},{:02X}",
+	cpu_state << std::format("A:{:02X} F:{:02X} B:{:02X} C:{:02X} D:{:02X} E:{:02X} H:{:02X} L:{:02X} SP:{:04X} PC:{:04X} PCMEM:{:02X},{:02X},{:02X},{:02X}, CYCLE:{:d} TIMER:{:02X} TIMER_CONTROL:{:02X}",
 		registerA, registerF, registerB, registerC, registerD, registerE, registerH, registerL, stackPointer, programCounter,
-		Read(programCounter), Read(programCounter + 1), Read(programCounter + 2), Read(programCounter + 3)) << std::endl;
+		memory[programCounter], memory[programCounter + 1], memory[programCounter + 2], memory[programCounter + 3], cpu_cycles, memory[0xFF05], memory[0xFF07]) << std::endl;
 
 }
 
