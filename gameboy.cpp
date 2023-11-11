@@ -4,13 +4,20 @@ void GameBoy::Reset()
 {
 	programCounter = 0x0000;
 	stackPointer = 0x0000;
+
 	SDL_Init(SDL_INIT_VIDEO);
-	SDL_Init(SDL_INIT_AUDIO);
+	SDL_OpenAudio(&AudioSettings, 0);
 	SDL_CreateWindowAndRenderer(800, 720, 0, &window, &renderer);
 	SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
 	SDL_RenderClear(renderer);
 	SDL_PumpEvents();
-	//PlayAudio();
+
+	SDL_Init(SDL_INIT_AUDIO);
+	AudioSettings.freq = 44100;
+	AudioSettings.format = AUDIO_U8;
+	AudioSettings.channels = 1;
+	AudioSettings.samples = 1024;
+	SDL_OpenAudioDevice(SDL_GetAudioDeviceName(2, 0), 0, &AudioSettings, &AudioSettingsObtained, 0);
 }
 
 void GameBoy::SetToPostBootState()
@@ -166,6 +173,34 @@ void GameBoy::Write(uint8_t value, uint16_t address)
 		StartDMATransfer(source_address);
 	}
 
+	// Trigger audio channel 1
+	if (address == 0xFF14 && ExtractBit(value, 7))
+	{
+		uint8_t& ch1_timer = memory[0xFF11];
+		uint8_t& ch1_envelope = memory[0xFF12];
+		uint8_t& control = memory[0xFF26];
+		ch1_length_clock = ch1_timer & 0b00111111;
+		ch1_volume = ch1_envelope & 0xf0;
+		control |= 1;
+	}
+
+	// Trigger audio channel 3
+	if (address == 0xFF1E && ExtractBit(value, 7))
+	{
+		uint8_t& ch3_timer = memory[0xFF1B];
+		uint8_t& control = memory[0xFF26];
+		ch1_length_clock = ch3_timer;
+		control |= (1 << 2);
+	}
+
+	if (address == 0xFF1A)
+	{
+		// Turn channel 3 off or on
+		uint8_t& control = memory[0xFF26];
+		if (!ExtractBit(value, 7)) { control &= ~(1 << 2); }
+		else { control |= (1 << 2); }
+	}
+
 	memory[address] = value;
 }
 
@@ -267,6 +302,74 @@ void GameBoy::UpdatePPU(uint64_t cycleCount)
 	ppu_cycles += cycleCount;
 }
 
+void GameBoy::UpdateAPUTimers(uint64_t cycleCount)
+{
+	uint8_t& ch1_period_low = memory[0xFF13];
+	uint8_t& ch1_period_high = memory[0xFF14];
+	uint8_t& ch2_period_low = memory[0xFF18];
+	uint8_t& ch2_period_high = memory[0xFF19];
+	uint8_t& ch3_period_low = memory[0xFF1D];
+	uint8_t& ch3_period_high = memory[0xFF1E];
+	uint8_t& ch3_output_level = memory[0xFF1C];
+
+	uint8_t& control = memory[0xFF26];
+
+	uint16_t previous_m_cycles = cpu_cycles / 4;
+	uint16_t current_m_cycles = (cpu_cycles + cycleCount) / 4;
+	uint16_t delta = current_m_cycles - previous_m_cycles;
+
+
+	ch1_period_divider += delta;
+	ch2_period_divider += delta;
+	ch3_period_divider += 2 * delta;
+
+	if (ch1_period_divider > 0x07FF)
+	{
+		ch1_period_divider = ((uint16_t(ch1_period_high) & 0b111) << 8) + ch1_period_low;
+		ch1_period_overflow = true;
+
+	}
+
+	if (ch2_period_divider > 0x07FF)
+	{
+		ch2_period_divider = ((uint16_t(ch2_period_high) & 0b111) << 8) + ch2_period_low;
+		ch2_period_overflow = true;
+	}
+
+	if (ch3_period_divider > 0x07FF)
+	{
+		uint16_t period_value = ((uint16_t(ch3_period_high) & 0b111) << 8) + ch3_period_low;
+		ch3_period_divider = period_value;
+		uint8_t volume_array[4] = { 0, 16, 8, 4 };
+		uint8_t volume = volume_array[((ch3_output_level & 0b01100000) >> 5)];
+		uint8_t sample_byte = memory[0xFF30 + (ch3_sample % 0x20) / 2];
+		ch3_buffer[ch3_sample] = ch3_sample % 2 ? (sample_byte & 0x0f) : (sample_byte >> 4);
+		ch3_buffer[ch3_sample] *= volume;
+		if (ch3_sample == 127)
+		{
+			clock_t new_clock = clock();
+			float delta = float(new_clock - audio_clock) / float(CLOCKS_PER_SEC);
+			float sample_rate = 2097152 / (2048 - period_value);
+			float sample_stride = sample_rate / float(44100);
+			std::vector<uint8_t> samples;
+			for (uint32_t i = 0; i < AudioSettings.freq * delta; i++) {
+				// SDL_QueueAudio expects a signed 16-bit value
+				// note: "5000" here is just gain so that we will hear something
+				//uint8_t sample = (sin(x * 4) + 1) * 128;
+				uint8_t sample = ch3_buffer[(uint8_t(i * sample_stride)) % 128];
+				samples.push_back(sample);
+			}
+			std::vector<uint8_t> mixed_samples;
+			mixed_samples.resize(samples.size());
+			SDL_MixAudioFormat(mixed_samples.data(), samples.data(), AUDIO_U8, samples.size(), 16);
+			SDL_QueueAudio(2, mixed_samples.data(), mixed_samples.size());
+			SDL_PauseAudioDevice(2, 0);
+			audio_clock = clock();
+		}
+		ch3_sample = (ch3_sample + 1) % 128;	
+	}
+}
+
 void GameBoy::StepAPU()
 {
 	uint8_t& control = memory[0xFF26];
@@ -275,12 +378,12 @@ void GameBoy::StepAPU()
 
 	uint8_t& ch1_sweep = memory[0xFF10];
 	uint8_t& ch1_timer = memory[0xFF11];
-	uint8_t& ch1_volume = memory[0xFF12];
+	uint8_t& ch1_envelope = memory[0xFF12];
 	uint8_t& ch1_period_low = memory[0xFF13];
 	uint8_t& ch1_period_high = memory[0xFF14];
 
 	uint8_t& ch2_timer = memory[0xFF16];
-	uint8_t& ch2_volume = memory[0xFF17];
+	uint8_t& ch2_envelope= memory[0xFF17];
 	uint8_t& ch2_period_low = memory[0xFF18];
 	uint8_t& ch2_period_high = memory[0xFF19];
 
@@ -291,7 +394,7 @@ void GameBoy::StepAPU()
 	uint8_t& ch3_period_high = memory[0xFF1E];
 
 	uint8_t& ch4_timer = memory[0xFF20];
-	uint8_t& ch4_volume = memory[0xFF21];
+	uint8_t& ch4_envelope = memory[0xFF21];
 	uint8_t& ch4_frequency = memory[0xFF22];
 	uint8_t& ch4_control = memory[0xFF23];
 
@@ -314,12 +417,20 @@ void GameBoy::StepAPU()
 	{
 		uint8_t ch1_pace = (ch1_sweep & (0b01110000)) >> 4;
 		uint8_t ch1_direction = ExtractBit(ch1_sweep, 3);
+		if (ExtractBit(ch1_period_high, 6))
+		{
+			ch1_length_clock++;
+			if (ch1_length_clock >= 64)
+			{
+				control &= ~1;
+			}
+		}
 
 		// Period sweep
 		if (ch1_pace != 0 && div_apu_clock % (4 * ch1_pace) == 0)
 		{
 			uint8_t ch1_step = (ch1_sweep & 0b00000111);
-			uint16_t ch1_period = ch1_period_low + ((ch1_period_high & 0b00000111) << 8);
+			uint16_t ch1_period = ch1_period_low + ((uint16_t(ch1_period_high) & 0b00000111) << 8);
 			uint16_t ch1_period_change = ch1_period / (ldexp(1, ch1_step));
 			ch1_period = ch1_direction ? ch1_period - ch1_period_change : ch1_period + ch1_period_change;
 			if (ch1_period > 0x7FF)
@@ -332,20 +443,52 @@ void GameBoy::StepAPU()
 				ch1_period_high = (ch1_period & 0b11100000000) >> 8;
 			}
 		}
+
+		uint8_t ch1_envelope_pace = ch1_envelope & 0b111;
 		
+		if (ch1_envelope_pace != 0 && div_apu_clock % (8 * ch1_envelope_pace) == 0)
+		{
+			if (ExtractBit(ch1_envelope, 3)) { ch1_volume = ch1_volume >= 15 ? ch1_volume : ch1_volume + 1; }
+			else { ch1_volume = ch1_volume <= 0 ? ch1_volume : ch1_volume - 1; }
+
+		}
 
 		// duty cycle (fraction out of 8)
+		uint8_t wave_0[8] = { 0, 0, 0, 0, 0, 0, 0, 1 };
+		uint8_t wave_1[8] = { 1, 0, 0, 0, 0, 0, 0, 1 };
+		uint8_t wave_2[8] = { 1, 0, 0, 0, 0, 1, 1, 1 };
+		uint8_t wave_3[8] = { 0, 1, 1, 1, 1, 1, 1, 0 };
+
 		uint8_t wave_duty;
-		switch ((ch1_timer & 0b11000000) >> 6)
+		if (ch1_period_overflow)
 		{
-		case 0:
-			wave_duty = 1;
-		case 1:
-			wave_duty = 2;
-		case 2:
-			wave_duty = 4;
-		case 3:
-			wave_duty = 6;
+			ch1_period_overflow = false;
+			switch ((ch1_timer & 0b11000000) >> 6)
+			{
+			case 0:
+			{
+				ch1_buffer[ch1_sample] = wave_0[ch1_sample % 8];
+				break;
+			}
+			case 1:
+			{
+				ch1_buffer[ch1_sample] = wave_1[ch1_sample % 8];
+				break;
+			}
+			case 2:
+			{
+				ch1_buffer[ch1_sample] = wave_2[ch1_sample % 8];
+				break;
+			}
+			case 3:
+			{
+				ch1_buffer[ch1_sample] = wave_3[ch1_sample % 8];
+				break;
+			}
+			default:
+				_ASSERTE(false);
+			}
+			ch1_sample = (ch1_sample + 1) % 1024;
 		}
 
 	}
@@ -359,7 +502,14 @@ void GameBoy::StepAPU()
 	// Channel 3
 	if (ExtractBit(control, 2))
 	{
-
+		if (ExtractBit(ch3_period_high, 6))
+		{
+			ch3_length_clock++;
+			if (ch3_length_clock >= 64)
+			{
+				control &= ~(1 << 2);
+			}
+		}
 	}
 
 	// Channel 4
@@ -2375,12 +2525,16 @@ void GameBoy::Decrement16(uint8_t opcode)
 	{
 	case 0:
 		reg_string = "BC";
+		break;
 	case 1:
 		reg_string = "DE";
+		break;
 	case 2:
 		reg_string = "HL";
+		break;
 	case 3:
 		reg_string = "SP";
+		break;
 	}
 
 	if (printLogs)
@@ -2994,6 +3148,7 @@ void GameBoy::UpdateClock(uint32_t cycleCount)
 {
 	// todo: other stuff that needs updating
 	UpdatePPU(cycleCount);
+	UpdateAPUTimers(cycleCount);
 	cpu_cycles += cycleCount;
 	
 
@@ -3022,10 +3177,7 @@ void GameBoy::UpdateClock(uint32_t cycleCount)
 		if (ExtractBit(previous_div, 4) && !ExtractBit(divider_register, 4))
 		{
 			div_apu_clock++;
-			if ((div_apu_clock % 2) == 0)
-			{
-				/*StepAPU();*/
-			}
+			StepAPU();
 		}
 	}
 	

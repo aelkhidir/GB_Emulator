@@ -109,9 +109,31 @@ private:
 	// Audio
 	uint16_t ch1_length_clock = 0;
 	uint16_t ch2_length_clock = 0;
+	uint16_t ch3_length_clock = 0;
+	uint16_t ch1_period_divider = 0;
+	uint16_t ch2_period_divider = 0;
+	uint16_t ch3_period_divider = 0;
+	bool ch1_period_overflow = 0;
+	bool ch2_period_overflow = 0;
+	bool ch3_period_overflow = 0;
+
+	uint8_t ch1_buffer[128];
+	uint8_t ch2_buffer[128];
+	uint8_t ch3_buffer[128];
+	uint16_t ch1_sample = 0;
+	uint16_t ch2_sample = 0;
+	uint16_t ch3_sample = 0;
+	uint16_t ch3_sample_counter = 0;
+
+	uint8_t ch1_volume = 0;
+	uint8_t ch2_volume = 0;
 	uint16_t div_apu_clock = 0;
 	inline static Uint8* audio_position = 0;
 	inline static Uint32 audio_length = 0;
+	SDL_AudioSpec AudioSettings = { 0 };
+	SDL_AudioSpec AudioSettingsObtained = { 0 };
+	SDL_AudioDeviceID AudioDevice;
+	clock_t audio_clock = clock();
 
 	// real clock for emulating FPS
 	clock_t realTime = clock();
@@ -158,6 +180,8 @@ public:
 	void UpdatePPU(uint64_t cycleCount);
 
 	void StepAPU();
+
+	void UpdateAPUTimers(uint64_t cycleCount);
 
 	bool CanAccessVRAM();
 
@@ -388,7 +412,6 @@ public:
 	void RES(uint8_t opcode);
 
 	void SET(uint8_t opcode);
-
 	
 	void LoadRom(std::string filename, uint16_t startAddress);
 
