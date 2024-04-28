@@ -31,6 +31,7 @@ constexpr auto ZeroFlag = 7;
 constexpr auto NegativeFlag = 6;
 constexpr auto HalfCarryFlag = 5;
 constexpr auto CarryFlag = 4;
+constexpr auto audio_buffer_size = 4096;
 
 enum class Instruction;
 
@@ -65,6 +66,7 @@ public:
 	~GameBoy()
 	{
 		delete[] memory;
+		delete[] cartridgeMemory;
 	}
 private:
 	class FIFO
@@ -87,7 +89,7 @@ private:
 	uint16_t programCounter = 0;
 	uint16_t stackPointer = 0;
 	uint8_t* memory = new uint8_t[0x10000]();
-	uint8_t cartridgeMemory[0x100];
+	uint8_t* cartridgeMemory = new uint8_t[0x10000]();
 
 	// Interrupts, clock
 	bool IME = 0;
@@ -113,13 +115,10 @@ private:
 	uint16_t ch1_period_divider = 0;
 	uint16_t ch2_period_divider = 0;
 	uint16_t ch3_period_divider = 0;
-	bool ch1_period_overflow = 0;
-	bool ch2_period_overflow = 0;
-	bool ch3_period_overflow = 0;
 
-	uint8_t ch1_buffer[128];
-	uint8_t ch2_buffer[128];
-	uint8_t ch3_buffer[128];
+	uint8_t ch1_buffer[audio_buffer_size];
+	uint8_t ch2_buffer[audio_buffer_size];
+	uint8_t ch3_buffer[audio_buffer_size];
 	uint16_t ch1_sample = 0;
 	uint16_t ch2_sample = 0;
 	uint16_t ch3_sample = 0;
@@ -147,8 +146,8 @@ private:
 	FIFO backgroundFifo = FIFO(*this);
 	FIFO spriteFifo = FIFO(*this);
 
-	// Options 
-	bool printLogs = true;
+	// Debug logs 
+	bool printLogs = false;
 
 	// Serial Transfer Stream
 	std::ofstream serial_transfer;

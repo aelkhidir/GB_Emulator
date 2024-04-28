@@ -14,7 +14,7 @@ void GameBoy::Reset()
 
 	SDL_Init(SDL_INIT_AUDIO);
 	AudioSettings.freq = 44100;
-	AudioSettings.format = AUDIO_U8;
+	AudioSettings.format = AUDIO_U16;
 	AudioSettings.channels = 1;
 	AudioSettings.samples = 1024;
 	SDL_OpenAudioDevice(SDL_GetAudioDeviceName(2, 0), 0, &AudioSettings, &AudioSettingsObtained, 0);
@@ -180,8 +180,18 @@ void GameBoy::Write(uint8_t value, uint16_t address)
 		uint8_t& ch1_envelope = memory[0xFF12];
 		uint8_t& control = memory[0xFF26];
 		ch1_length_clock = ch1_timer & 0b00111111;
-		ch1_volume = ch1_envelope & 0xf0;
+		ch1_volume = (ch1_envelope & 0xf0) >> 4;
 		control |= 1;
+	}
+
+	if (address == 0xFF19 && ExtractBit(value, 7))
+	{
+		uint8_t& ch2_timer = memory[0xFF16];
+		uint8_t& ch2_envelope = memory[0xFF17];
+		uint8_t& control = memory[0xFF26];
+		ch2_length_clock = ch2_timer & 0b00111111;
+		ch2_volume = (ch2_envelope & 0xf0) >> 4;
+		control |= (1 << 1);
 	}
 
 	// Trigger audio channel 3
@@ -326,47 +336,164 @@ void GameBoy::UpdateAPUTimers(uint64_t cycleCount)
 	if (ch1_period_divider > 0x07FF)
 	{
 		ch1_period_divider = ((uint16_t(ch1_period_high) & 0b111) << 8) + ch1_period_low;
-		ch1_period_overflow = true;
+		// duty cycle (fraction out of 8)
+		uint8_t wave_0[8] = { 0, 0, 0, 0, 0, 0, 0, 1 };
+		uint8_t wave_1[8] = { 1, 0, 0, 0, 0, 0, 0, 1 };
+		uint8_t wave_2[8] = { 1, 0, 0, 0, 0, 1, 1, 1 };
+		uint8_t wave_3[8] = { 0, 1, 1, 1, 1, 1, 1, 0 };
+		uint8_t& ch1_timer = memory[0xFF11];
+		switch ((ch1_timer & 0b11000000) >> 6)
+		{
+		case 0:
+		{
+			ch1_buffer[ch1_sample] = wave_0[ch1_sample % 8] * ch1_volume;
+			break;
+		}
+		case 1:
+		{
+			ch1_buffer[ch1_sample] = wave_1[ch1_sample % 8] * ch1_volume;
+			break;
+		}
+		case 2:
+		{
+			ch1_buffer[ch1_sample] = wave_2[ch1_sample % 8] * ch1_volume;
+			break;
+		}
+		case 3:
+		{
+			ch1_buffer[ch1_sample] = wave_3[ch1_sample % 8] * ch1_volume;
+			break;
+		}
+		default:
+			_ASSERTE(false);
+		}
 
+		if (ch1_sample != audio_buffer_size - 1)
+		{
+			ch1_sample = (ch1_sample + 1) % audio_buffer_size;
+		}
 	}
 
 	if (ch2_period_divider > 0x07FF)
 	{
 		ch2_period_divider = ((uint16_t(ch2_period_high) & 0b111) << 8) + ch2_period_low;
-		ch2_period_overflow = true;
+		// duty cycle (fraction out of 8)
+		uint8_t wave_0[8] = { 0, 0, 0, 0, 0, 0, 0, 1 };
+		uint8_t wave_1[8] = { 1, 0, 0, 0, 0, 0, 0, 1 };
+		uint8_t wave_2[8] = { 1, 0, 0, 0, 0, 1, 1, 1 };
+		uint8_t wave_3[8] = { 0, 1, 1, 1, 1, 1, 1, 0 };
+		uint8_t& ch2_timer = memory[0xFF16];
+		switch ((ch2_timer & 0b11000000) >> 6)
+		{
+		case 0:
+		{
+			ch2_buffer[ch2_sample] = wave_0[ch2_sample % 8] * ch2_volume;
+			break;
+		}
+		case 1:
+		{
+			ch2_buffer[ch2_sample] = wave_1[ch2_sample % 8] * ch2_volume;
+			break;
+		}
+		case 2:
+		{
+			ch2_buffer[ch2_sample] = wave_2[ch2_sample % 8] * ch2_volume;
+			break;
+		}
+		case 3:
+		{
+			ch2_buffer[ch2_sample] = wave_3[ch2_sample % 8] * ch2_volume;
+			break;
+		}
+		default:
+			_ASSERTE(false);
+		}
+
+		if (ch2_sample != audio_buffer_size - 1)
+		{
+			ch2_sample = (ch2_sample + 1) % audio_buffer_size;
+		}
 	}
 
 	if (ch3_period_divider > 0x07FF)
 	{
-		uint16_t period_value = ((uint16_t(ch3_period_high) & 0b111) << 8) + ch3_period_low;
-		ch3_period_divider = period_value;
+		uint16_t ch3_period_value = ((uint16_t(ch3_period_high) & 0b111) << 8) + ch3_period_low;
+		ch3_period_divider = ch3_period_value;
 		uint8_t volume_array[4] = { 0, 16, 8, 4 };
 		uint8_t volume = volume_array[((ch3_output_level & 0b01100000) >> 5)];
 		uint8_t sample_byte = memory[0xFF30 + (ch3_sample % 0x20) / 2];
 		ch3_buffer[ch3_sample] = ch3_sample % 2 ? (sample_byte & 0x0f) : (sample_byte >> 4);
 		ch3_buffer[ch3_sample] *= volume;
-		if (ch3_sample == 127)
-		{
-			clock_t new_clock = clock();
-			float delta = float(new_clock - audio_clock) / float(CLOCKS_PER_SEC);
-			float sample_rate = 2097152 / (2048 - period_value);
-			float sample_stride = sample_rate / float(44100);
-			std::vector<uint8_t> samples;
-			for (uint32_t i = 0; i < AudioSettings.freq * delta; i++) {
-				// SDL_QueueAudio expects a signed 16-bit value
-				// note: "5000" here is just gain so that we will hear something
-				//uint8_t sample = (sin(x * 4) + 1) * 128;
-				uint8_t sample = ch3_buffer[(uint8_t(i * sample_stride)) % 128];
-				samples.push_back(sample);
+		ch3_sample = (ch3_sample + 1) % audio_buffer_size;	
+	}
+
+
+	if (((ch3_sample % 128 == 0)))
+	{
+		uint16_t ch1_period_value = ((uint16_t(ch1_period_high) & 0b111) << 8) + ch1_period_low;
+		uint16_t ch2_period_value = ((uint16_t(ch2_period_high) & 0b111) << 8) + ch2_period_low;
+		uint16_t ch3_period_value = ((uint16_t(ch3_period_high) & 0b111) << 8) + ch3_period_low;
+
+		float ch1_sample_rate = 1048576 / (2048 - ch1_period_value);
+		float ch2_sample_rate = 1048576 / (2048 - ch2_period_value);
+		float ch3_sample_rate = 2097152 / (2048 - ch3_period_value);
+
+		float ch1_sample_stride = ch1_sample_rate / float(AudioSettings.freq);
+		float ch2_sample_stride = ch2_sample_rate / float(AudioSettings.freq);
+		float ch3_sample_stride = ch3_sample_rate / float(AudioSettings.freq);
+
+		float ch1_frequency = ch1_sample_rate / 8;
+		float ch2_frequency = ch2_sample_rate / 8;
+
+		clock_t new_clock = clock();
+		float delta = float(new_clock - audio_clock) / float(CLOCKS_PER_SEC);
+		//std::vector<uint8_t> ch1_samples;
+		//std::vector<uint8_t> ch2_samples;
+		//std::vector<uint8_t> ch3_samples;
+		std::vector<uint16_t> samples;
+		for (uint32_t i = 0; i < AudioSettings.freq * delta; i++) {
+			// SDL_QueueAudio expects a signed 16-bit value
+			// note: "5000" here is just gain so that we will hear something
+			//uint8_t sample = (sin(x * 4) + 1) * 128;
+			//uint8_t ch1_sample = ch1_buffer[(uint16_t(i * ch1_sample_stride)) % audio_buffer_size];
+			//uint8_t ch2_sample = ch2_buffer[(uint16_t(i * ch2_sample_stride)) % audio_buffer_size];
+
+			uint16_t ch1_sample = ch1_volume * sin(float(i) * 2.0f * M_PI * ch1_frequency / float(AudioSettings.freq));
+			uint16_t ch2_sample = ch2_volume * sin(float(i) * 2.0f * M_PI * ch2_frequency / float(AudioSettings.freq));
+			uint16_t ch3_sample = ch3_buffer[(uint16_t(i * ch3_sample_stride)) % audio_buffer_size];
+			uint16_t sample = 0;
+
+			/*if (ExtractBit(control, 0))
+			{
+				sample += ch1_sample / 32;
 			}
-			std::vector<uint8_t> mixed_samples;
-			mixed_samples.resize(samples.size());
-			SDL_MixAudioFormat(mixed_samples.data(), samples.data(), AUDIO_U8, samples.size(), 16);
-			SDL_QueueAudio(2, mixed_samples.data(), mixed_samples.size());
-			SDL_PauseAudioDevice(2, 0);
-			audio_clock = clock();
+			
+			if (ExtractBit(control, 1))
+			{
+				sample += ch2_sample / 32;
+			}*/
+			
+			if (ExtractBit(memory[0xFF1A], 7))
+			{
+				sample += ch3_sample * 16;
+			}
+			
+			//ch1_samples.push_back(ch1_sample);
+			//ch2_samples.push_back(ch2_sample);
+			//ch3_samples.push_back(ch3_sample);
+			samples.push_back(sample);
 		}
-		ch3_sample = (ch3_sample + 1) % 128;	
+		//std::vector<uint8_t> mixed_samples;
+		//mixed_samples.resize(ch1_samples.size());
+		//SDL_MixAudioFormat(mixed_samples.data(), ch1_samples.data(), AUDIO_U8, ch1_samples.size(), 8);
+		//SDL_MixAudioFormat(mixed_samples.data(), ch2_samples.data(), AUDIO_U8, ch2_samples.size(), 8);
+		//SDL_MixAudioFormat(mixed_samples.data(), ch3_samples.data(), AUDIO_U8, ch3_samples.size(), 8);
+		if (ExtractBit(control, 7))
+		{
+			SDL_QueueAudio(2, samples.data(), samples.size() * 2);
+		}	
+		SDL_PauseAudioDevice(2, 0);
+		audio_clock = clock();
 	}
 }
 
@@ -448,47 +575,9 @@ void GameBoy::StepAPU()
 		
 		if (ch1_envelope_pace != 0 && div_apu_clock % (8 * ch1_envelope_pace) == 0)
 		{
-			if (ExtractBit(ch1_envelope, 3)) { ch1_volume = ch1_volume >= 15 ? ch1_volume : ch1_volume + 1; }
-			else { ch1_volume = ch1_volume <= 0 ? ch1_volume : ch1_volume - 1; }
+			if (ExtractBit(ch1_envelope, 3)) { ch1_volume = std::min<uint8_t>(15, ch1_volume + 1); }
+			else { ch1_volume = std::max<uint8_t>(0, ch1_volume - 1); }
 
-		}
-
-		// duty cycle (fraction out of 8)
-		uint8_t wave_0[8] = { 0, 0, 0, 0, 0, 0, 0, 1 };
-		uint8_t wave_1[8] = { 1, 0, 0, 0, 0, 0, 0, 1 };
-		uint8_t wave_2[8] = { 1, 0, 0, 0, 0, 1, 1, 1 };
-		uint8_t wave_3[8] = { 0, 1, 1, 1, 1, 1, 1, 0 };
-
-		uint8_t wave_duty;
-		if (ch1_period_overflow)
-		{
-			ch1_period_overflow = false;
-			switch ((ch1_timer & 0b11000000) >> 6)
-			{
-			case 0:
-			{
-				ch1_buffer[ch1_sample] = wave_0[ch1_sample % 8];
-				break;
-			}
-			case 1:
-			{
-				ch1_buffer[ch1_sample] = wave_1[ch1_sample % 8];
-				break;
-			}
-			case 2:
-			{
-				ch1_buffer[ch1_sample] = wave_2[ch1_sample % 8];
-				break;
-			}
-			case 3:
-			{
-				ch1_buffer[ch1_sample] = wave_3[ch1_sample % 8];
-				break;
-			}
-			default:
-				_ASSERTE(false);
-			}
-			ch1_sample = (ch1_sample + 1) % 1024;
 		}
 
 	}
@@ -496,7 +585,23 @@ void GameBoy::StepAPU()
 	// Channel 2
 	if (ExtractBit(control, 1))
 	{
+		if (ExtractBit(ch2_period_high, 6))
+		{
+			ch2_length_clock++;
+			if (ch2_length_clock >= 64)
+			{
+				control &= ~1;
+			}
+		}
 
+		uint8_t ch2_envelope_pace = ch2_envelope & 0b111;
+
+		if (ch2_envelope_pace != 0 && div_apu_clock % (8 * ch2_envelope_pace) == 0)
+		{
+			if (ExtractBit(ch2_envelope, 3)) { ch2_volume = std::min<uint8_t>(15, ch2_volume + 1); }
+			else { ch2_volume = std::max<uint8_t>(0, ch2_volume - 1); }
+
+		}
 	}
 
 	// Channel 3
@@ -526,7 +631,7 @@ void GameBoy::ExecutionLoop()
 {
 	while (true)
 	{
-		if (!haltMode)
+		if (!haltMode && printLogs)
 		{
 			LogCPUState();
 		}

@@ -3,14 +3,13 @@
 
 int main()
 {
-	bool skipBootRom = true;
+	bool postBootState = true;
 
 	GameBoy gameboy;
-	gameboy.Reset();
 	gameboy.LoadRom("bootrom.gb", 0x0000);
-	gameboy.LoadCartridge("tests/09-op r,r.gb");
+	gameboy.LoadCartridge("tetris.gb");
 
-	if (skipBootRom)
+	if (postBootState)
 	{
 		gameboy.SetToPostBootState();
 	}
