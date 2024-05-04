@@ -35,11 +35,14 @@ enum class Instruction;
 
 class Memory;
 class APU;
+class PPU;
+class GameBoy;
 
 class CPU
 {
 public:
-	CPU(Memory* memory_pointer, APU* apu_pointer) : memory(memory_pointer), apu(apu_pointer) {}
+	CPU(Memory* memory_pointer, APU* apu_pointer, PPU* ppu_pointer, GameBoy* gameboy_pointer) : memory(memory_pointer), apu(apu_pointer), ppu(ppu_pointer), gameboy(gameboy_pointer), cpu_state("cpu_state.txt") {}
+	CPU() : cpu_state("cpu_state.txt") {};
 
 	// Main stuff
 	uint8_t registerA, registerB, registerC, registerD, registerE, registerF, registerH, registerL;
@@ -64,14 +67,21 @@ public:
 
 	Memory* memory;
 	APU* apu;
+	PPU* ppu;
+	GameBoy* gameboy;
 
-	bool printLogs = false;
+	bool printLogs = true;
 
 	std::ofstream cpu_state;
 
 	void Init();
+	void SetPointers(Memory* memory_pointer, APU* apu_pointer, PPU* ppu_pointer, GameBoy* gameboy_pointer);
 	bool HandleInterrupts();
 	void StartDMATransfer(uint16_t address);
+	void RequestVblankInterrupt();
+	void RequestStatInterrupt();
+	void RequestTimerInterrupt();
+	void RequestSerialInterrupt();
 	void RequestJoypadInterrupt();
 	uint8_t CheckCondition(uint8_t condition);
 	Instruction DecodeOpcode(uint8_t opcode);

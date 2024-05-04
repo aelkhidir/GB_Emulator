@@ -2,8 +2,16 @@
 #include "cpu.hpp"
 #include "apu.hpp"
 #include "joypad.hpp"
+#include "gameboy.hpp"
 #include "helpers.hpp"
 
+void Memory::SetPointers(CPU* cpu_pointer, APU* apu_pointer, Joypad* joypad_pointer, GameBoy* gameboy_pointer)
+{
+	cpu = cpu_pointer;
+	apu = apu_pointer;
+	joypad = joypad_pointer;
+	gameboy = gameboy_pointer;
+}
 
 void Memory::UnmapBootRom()
 {
@@ -11,6 +19,57 @@ void Memory::UnmapBootRom()
 	{
 		mainMemory[byteNumber] = cartridgeMemory[byteNumber];
 	}
+}
+
+void Memory::LoadRom(std::string filename, uint16_t startAddress)
+{
+	std::ifstream file(filename, std::ifstream::binary);
+
+	if (file.is_open())
+	{
+		std::vector<char> bytes(
+			(std::istreambuf_iterator<char>(file)),
+			(std::istreambuf_iterator<char>()));
+
+		file.close();
+
+		for (uint32_t byteNumber = 0; byteNumber < bytes.size(); byteNumber++)
+		{
+			mainMemory[startAddress + byteNumber] = bytes[byteNumber];
+		}
+		return;
+	}
+	_ASSERTE(false);
+}
+
+void Memory::LoadCartridge(std::string filename)
+{
+	std::ifstream cart(filename, std::ifstream::binary);
+
+	if (cart.is_open())
+	{
+		std::vector<char> bytes(
+			(std::istreambuf_iterator<char>(cart)),
+			(std::istreambuf_iterator<char>()));
+
+		cart.close();
+
+		for (uint32_t byteNumber = 0; byteNumber < bytes.size(); byteNumber++)
+		{
+			cartridgeMemory[byteNumber] = bytes[byteNumber];
+		}
+
+		for (uint32_t byteNumber = 0x100; byteNumber < 0x8000; byteNumber++)
+		{
+			mainMemory[byteNumber] = cartridgeMemory[byteNumber];
+		}
+
+		mbcState = static_cast<MBC>(cartridgeMemory[0x147]);
+		uint8_t memory_banks = bytes.size() / 0x4000;
+		bankBits = std::bit_width(memory_banks) - 1; // log2
+		return;
+	}
+	_ASSERTE(false);
 }
 
 void Memory::SetToPostBootState()
@@ -96,7 +155,7 @@ void Memory::UpdateClock(uint64_t cycles)
 
 uint8_t Memory::Read(uint16_t address)
 {
-	UpdateClock(4);
+	gameboy->UpdateClock(4);
 
 	if (address >= 0xFEA0 && address <= 0xFEFF)
 	{
@@ -167,7 +226,7 @@ uint8_t Memory::ReadMappedAddress(uint16_t address)
 
 void Memory::Write(uint8_t value, uint16_t address)
 {
-	UpdateClock(4);
+	gameboy->UpdateClock(4);
 
 	// MBC registers
 	if (mbcState == MBC::MBC1)

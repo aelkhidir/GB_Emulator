@@ -2,7 +2,18 @@
 #include "memory.hpp"
 #include "joypad.hpp"
 #include "apu.hpp"
+#include "ppu.hpp"
+#include "gameboy.hpp"
 #include "helpers.hpp"
+
+
+void CPU::SetPointers(Memory* memory_pointer, APU* apu_pointer, PPU* ppu_pointer, GameBoy* gameboy_pointer)
+{
+	memory = memory_pointer;
+	apu = apu_pointer;
+	ppu = ppu_pointer;
+	gameboy = gameboy_pointer;
+}
 
 void CPU::Init()
 {
@@ -18,6 +29,26 @@ void CPU::Init()
 	stackPointer = 0xFFFE;
 
 	cycles = 0;
+}
+
+void CPU::RequestVblankInterrupt()
+{
+	interruptRequests |= (1 << 0);
+}
+
+void CPU::RequestStatInterrupt()
+{
+	interruptRequests |= (1 << 1);
+}
+
+void CPU::RequestTimerInterrupt()
+{
+	interruptRequests |= (1 << 2);
+}
+
+void CPU::RequestSerialInterrupt()
+{
+	interruptRequests |= (1 << 3);
 }
 
 void CPU::RequestJoypadInterrupt()
@@ -42,7 +73,7 @@ bool CPU::HandleInterrupts()
 		_ASSERTE(num < 5 && !DMA_transfer);
 		interruptRequests &= ~(1 << num);
 		IME = 0;
-		UpdateClock(8);
+		gameboy->UpdateClock(8);
 		Push(Helpers::GetHighByte(programCounter));
 		Push(Helpers::GetLowByte(programCounter));
 		uint8_t interruptVector = 0x40 + num * 0x8;
@@ -307,13 +338,13 @@ Instruction CPU::DecodeOpcode(uint8_t opcode)
 void CPU::IncrementProgramCounter(int8_t offset)
 {
 	programCounter += offset;
-	UpdateClock(4);
+	gameboy->UpdateClock(4);
 }
 
 void CPU::SetProgramCounter(uint16_t value)
 {
 	programCounter = value;
-	UpdateClock(4);
+	gameboy->UpdateClock(4);
 }
 
 void CPU::Push(uint8_t value)
@@ -326,7 +357,7 @@ void CPU::Push16(uint8_t opcode)
 {
 	uint16_t value;
 	std::string reg_string;
-	UpdateClock(4);
+	gameboy->UpdateClock(4);
 
 	switch (opcode)
 	{
@@ -1010,7 +1041,7 @@ void CPU::LDfromAddress(uint8_t opcode)
 void CPU::LDStackPointerFromHL(uint8_t opcode)
 {
 	stackPointer = Get16BitRegisterValue(HL16);
-	UpdateClock(4);
+	gameboy->UpdateClock(4);
 
 	if (printLogs)
 	{
@@ -1023,7 +1054,7 @@ void CPU::LDHLFromStackPointer(uint8_t opcode)
 	int8_t offset = ReadROMLine();
 	uint32_t result = stackPointer + offset;
 	Set16BitRegister(HL16, stackPointer + offset);
-	UpdateClock(4);
+	gameboy->UpdateClock(4);
 
 	bool halfCarry = ((stackPointer & 0xF) + (offset & 0xF)) & 0x10;
 	bool carry = ((stackPointer & 0xFF) + uint8_t(offset)) > 0xFF;
@@ -1081,7 +1112,7 @@ void CPU::Add16(uint8_t opcode)
 	SetFlag(NegativeFlag, 0);
 	SetFlag(HalfCarryFlag, halfCarry);
 	SetFlag(CarryFlag, uint32_t(HLValue) + uint32_t(regValue) > 0xFFFF);
-	UpdateClock(4);
+	gameboy->UpdateClock(4);
 
 	if (printLogs)
 	{
@@ -1122,7 +1153,7 @@ void CPU::ImmediateAddToStackPointer(uint8_t opcode)
 	SetFlag(NegativeFlag, 0);
 	SetFlag(HalfCarryFlag, halfCarry);
 	SetFlag(CarryFlag, carry);
-	UpdateClock(8);
+	gameboy->UpdateClock(8);
 
 	if (printLogs)
 	{
@@ -1542,7 +1573,7 @@ void CPU::Increment16(uint8_t opcode)
 	uint8_t reg = (opcode & 0b00110000) >> 4;
 	uint16_t value = Get16BitRegisterValue(reg);
 	Set16BitRegister(reg, value + 1);
-	UpdateClock(4);
+	gameboy->UpdateClock(4);
 
 	if (printLogs)
 	{
@@ -1575,7 +1606,7 @@ void CPU::Decrement16(uint8_t opcode)
 	uint16_t value = Get16BitRegisterValue(reg);
 	std::string reg_string;
 	Set16BitRegister(reg, value - 1);
-	UpdateClock(4);
+	gameboy->UpdateClock(4);
 
 	switch (reg)
 	{
@@ -1874,7 +1905,7 @@ void CPU::FunctionReturn(uint8_t opcode)
 void CPU::ConditionalFunctionReturn(uint8_t opcode)
 {
 	uint8_t condition = (opcode & 0b00011000) >> 3;
-	UpdateClock(4);
+	gameboy->UpdateClock(4);
 	if (printLogs)
 	{
 		std::cout << ConditionToString(condition) << " ";
@@ -2097,7 +2128,6 @@ void CPU::UpdateClock(uint32_t cycleCount)
 {
 	cycles += cycleCount;
 
-
 	if (DMA_transfer && cycles - DMA_start > 640)
 	{
 		DMA_transfer = false;
@@ -2137,7 +2167,7 @@ void CPU::UpdateClock(uint32_t cycleCount)
 	auto increment_timer = [&]() {
 		if (timer_counter == 0xFF)
 		{
-			interrupt_requests |= (1 << 2);
+			RequestTimerInterrupt();
 			memory->Set(timer_counter_address, timer_modulo);
 		}
 		else
@@ -2460,7 +2490,7 @@ void CPU::LogCPUState()
 
 void CPU::LogCPUStateDetailed()
 {
-	cpu_state << std::format("A:{:02X} F:{:02X} B:{:02X} C:{:02X} D:{:02X} E:{:02X} H:{:02X} L:{:02X} SP:{:04X} SPMEM:{:02X},{:02X} PC:{:04X} PCMEM:{:02X},{:02X},{:02X},{:02X}, CYCLE:{:d} LY:{:d} TIMER:{:02X} TIMER_CONTROL:{:02X}",
+	cpu_state << std::format("A:{:02X} F:{:02X} B:{:02X} C:{:02X} D:{:02X} E:{:02X} H:{:02X} L:{:02X} SP:{:04X} SPMEM:{:02X},{:02X} PC:{:04X} PCMEM:{:02X},{:02X},{:02X},{:02X}, CYCLE:{:d}, PPU_CYCLE:{:d}, LY:{:02X} TIMER:{:02X} TIMER_CONTROL:{:02X}",
 		registerA, registerF, registerB, registerC, registerD, registerE, registerH, registerL, stackPointer, memory->mainMemory[stackPointer], memory->mainMemory[stackPointer + 1], programCounter,
-		memory->mainMemory[programCounter], memory->mainMemory[programCounter + 1], memory->mainMemory[programCounter + 2], memory->mainMemory[programCounter + 3], cycles, memory->mainMemory[0xFF44], memory->mainMemory[0xFF05], memory->mainMemory[0xFF07]) << std::endl;
+		memory->mainMemory[programCounter], memory->mainMemory[programCounter + 1], memory->mainMemory[programCounter + 2], memory->mainMemory[programCounter + 3], cycles, ppu->clock, memory->mainMemory[0xFF44], memory->mainMemory[0xFF05], memory->mainMemory[0xFF07]) << std::endl;
 }

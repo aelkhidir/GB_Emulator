@@ -16,6 +16,7 @@
 class APU;
 class CPU;
 class Joypad;
+class GameBoy;
 
 enum class MBC
 {
@@ -32,12 +33,17 @@ enum class MBC
 class Memory
 {
 public:
-	Memory(CPU* cpu, APU* apu, Joypad* joypad) : 
+	Memory(CPU* cpu, APU* apu, Joypad* joypad, GameBoy* gameboy) : 
 		memory_state("memory_state.txt"), 
 		serial_transfer("serial_transfer.txt"),
 		cpu(cpu),
 		apu(apu),
-		joypad(joypad)
+		joypad(joypad),
+		gameboy(gameboy)
+	{}
+	Memory() : 
+		memory_state("memory_state.txt"),
+		serial_transfer("serial_transfer.txt") 
 	{}
 	~Memory()
 	{
@@ -69,8 +75,12 @@ public:
 	CPU* cpu;
 	APU* apu;
 	Joypad* joypad;
+	GameBoy* gameboy;
 
+	void SetPointers(CPU* cpu_pointer, APU* apu_pointer, Joypad* joypad_pointer, GameBoy* gameboy_pointer);
 	void UnmapBootRom();
+	void LoadRom(std::string filename, uint16_t startAddress);
+	void LoadCartridge(std::string filename);
 	void SetToPostBootState();
 	void UpdateClock(uint64_t cycles);
 	//void StartDMATransfer(uint16_t address);
