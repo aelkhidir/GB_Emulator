@@ -72,6 +72,7 @@ void GameBoy::ExecutionLoop()
 		{
 			if (Helpers::ExtractBit(memory->mainMemory[0xFF40], 7) && Helpers::ExtractBit(memory->mainMemory[0xFF40], 0))
 			{
+				memory->memory_state << "Drawing screen\n";
 				ppu->DrawTileMap();
 				WaitForFrameTime();
 				ppu->clock %= 70224;

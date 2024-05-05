@@ -142,10 +142,10 @@ void Memory::SetToPostBootState()
 	mainMemory[0xFFFF] = 0x00;
 
 
-	if (printLogs)
+	/*if (printLogs)
 	{
 		LogMemoryState();
-	}
+	}*/
 }
 
 void Memory::UpdateClock(uint64_t cycles)
@@ -348,6 +348,11 @@ void Memory::Write(uint8_t value, uint16_t address)
 	if (address == 0xFF1A)
 	{
 		apu->ControlChannel3(value);
+	}
+
+	if (address >= 0x8000 && address < 0xA000 && CanAccessVRAM())
+	{
+		memory_state << std::format("Writing {:02X} to address {:04X} in VRAM\n", value, address);
 	}
 
 	mainMemory[address] = value;

@@ -2490,7 +2490,8 @@ void CPU::LogCPUState()
 
 void CPU::LogCPUStateDetailed()
 {
-	cpu_state << std::format("A:{:02X} F:{:02X} B:{:02X} C:{:02X} D:{:02X} E:{:02X} H:{:02X} L:{:02X} SP:{:04X} SPMEM:{:02X},{:02X} PC:{:04X} PCMEM:{:02X},{:02X},{:02X},{:02X}, CYCLE:{:d}, PPU_CYCLE:{:d}, LY:{:02X} TIMER:{:02X} TIMER_CONTROL:{:02X}",
+	cpu_state << std::format("A:{:02X} F:{:02X} B:{:02X} C:{:02X} D:{:02X} E:{:02X} H:{:02X} L:{:02X} SP:{:04X} SPMEM:{:02X},{:02X} PC:{:04X} PCMEM:{:02X},{:02X},{:02X},{:02X}, CYCLE:{:d}, PPU_CYCLE:{:d}, LY:{:02X} TIMER:{:02X} TIMER_CONTROL:{:02X} LCDC:{:d}",
 		registerA, registerF, registerB, registerC, registerD, registerE, registerH, registerL, stackPointer, memory->mainMemory[stackPointer], memory->mainMemory[stackPointer + 1], programCounter,
-		memory->mainMemory[programCounter], memory->mainMemory[programCounter + 1], memory->mainMemory[programCounter + 2], memory->mainMemory[programCounter + 3], cycles, ppu->clock, memory->mainMemory[0xFF44], memory->mainMemory[0xFF05], memory->mainMemory[0xFF07]) << std::endl;
+		memory->mainMemory[programCounter], memory->mainMemory[programCounter + 1], memory->mainMemory[programCounter + 2], memory->mainMemory[programCounter + 3], cycles, ppu->clock, memory->mainMemory[0xFF44], 
+		memory->mainMemory[0xFF05], memory->mainMemory[0xFF07], Helpers::ExtractBit(memory->mainMemory[0xFF40], 7)) << std::endl;
 }
