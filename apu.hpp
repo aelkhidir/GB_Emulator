@@ -15,7 +15,7 @@ class Memory;
 
 class APU
 {
-private:
+public:
 	// Audio
 	uint16_t ch1_length_clock = 0;
 	uint16_t ch2_length_clock = 0;
@@ -68,15 +68,12 @@ private:
 	uint8_t ch4_frequency;
 	uint8_t ch4_control;
 	Memory* memory;
-public:
 	APU(Memory* memory_pointer) : memory(memory_pointer) {}
 	void InitAPU();
 	void StepAPU();
-	void UpdateAPUTimers(uint64_t cycles);
-	void ReadState();
-	void WriteState();
-	void TriggerChannel1();
-	void TriggerChannel2();
-	void TriggerChannel3();
-	void ControlChannel3(uint8_t value);
+	void Update(uint64_t cycles);
+	void SwitchChannel1();
+	void SwitchChannel2();
+	void SwitchChannel3();
+	void ControlChannel3();
 };

@@ -49,6 +49,17 @@ public:
 	SDL_Renderer* renderer;
 	SDL_Window* window;
 
+	// Registers
+	uint8_t LCDControl;
+	uint8_t stat;
+	uint8_t SCY;
+	uint8_t SCX;
+	uint8_t LY;
+	uint8_t LYC;
+	uint8_t BGPalette;
+	uint8_t OBP0, OBP1;
+	
+
 	uint64_t clock = 0;
 
 	void Init();
@@ -64,7 +75,6 @@ public:
 	void DrawTileMap();
 	std::map<std::pair<uint8_t, uint8_t>, uint8_t> ExtractFullTileMap();
 	bool CheckPPUtoVRAMAccess();
-	void WriteScanlineY(uint8_t value);
 	void Terminate();
 	void Update(uint64_t cycleCount);
 

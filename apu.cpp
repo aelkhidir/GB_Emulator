@@ -13,65 +13,10 @@ void APU::InitAPU()
 	SDL_OpenAudioDevice(SDL_GetAudioDeviceName(2, 0), 0, &AudioSettings, &AudioSettingsObtained, 0);
 }
 
-// Todo: remove direct access to the memory pointer and use a bus component instead
-void APU::ReadState()
-{
-	control = memory->Get(0xFF26);
-	panning = memory->Get(0xFF25);
-	volume_and_vin_panning = memory->Get(0xFF24);
-
-	ch1_sweep = memory->Get(0xFF10);
-	ch1_timer = memory->Get(0xFF11);
-	ch1_envelope = memory->Get(0xFF12);
-	ch1_period_low = memory->Get(0xFF13);
-	ch1_period_high = memory->Get(0xFF14);
-
-	ch2_timer = memory->Get(0xFF16);
-	ch2_envelope = memory->Get(0xFF17);
-	ch2_period_low = memory->Get(0xFF18);
-	ch2_period_high = memory->Get(0xFF19);
-
-	ch3_dac_enable = memory->Get(0xFF1A);
-	ch3_timer = memory->Get(0xFF1B);
-	ch3_output_level = memory->Get(0xFF1C);
-	ch3_period_low = memory->Get(0xFF1D);
-	ch3_period_high = memory->Get(0xFF1E);
-
-	ch4_timer = memory->Get(0xFF20);
-	ch4_envelope = memory->Get(0xFF21);
-	ch4_frequency = memory->Get(0xFF22);
-	ch4_control = memory->Get(0xFF23);
-}
-
-void APU::WriteState()
-{
-	memory->Set(0xFF26, control);
-	memory->Set(0xFF25, panning);
-	memory->Set(0xFF24, volume_and_vin_panning);
-	memory->Set(0xFF10, ch1_sweep);
-	memory->Set(0xFF11, ch1_timer);
-	memory->Set(0xFF12, ch1_envelope);
-	memory->Set(0xFF13, ch1_period_low);
-	memory->Set(0xFF14, ch1_period_high);
-	memory->Set(0xFF16, ch2_timer);
-	memory->Set(0xFF17, ch2_envelope);
-	memory->Set(0xFF18, ch2_period_low);
-	memory->Set(0xFF19, ch2_period_high);
-	memory->Set(0xFF1A, ch3_dac_enable);
-	memory->Set(0xFF1B, ch3_timer);
-	memory->Set(0xFF1C, ch3_output_level);
-	memory->Set(0xFF1D, ch3_period_low);
-	memory->Set(0xFF1E, ch3_period_high);
-	memory->Set(0xFF20, ch4_timer);
-	memory->Set(0xFF21, ch4_envelope);
-	memory->Set(0xFF22, ch4_frequency);
-	memory->Set(0xFF23, ch4_control);
-}
 
 void APU::StepAPU()
 {
 	div_apu_clock++;
-	ReadState();
 
 	// If off, clear all registers and do nothing
 	if (!Helpers::ExtractBit(control, 7))
@@ -170,13 +115,14 @@ void APU::StepAPU()
 	{
 
 	}
-
-	WriteState();
 }
 
-void APU::UpdateAPUTimers(uint64_t cycles)
+void APU::Update(uint64_t cycles)
 {
-	ReadState();
+	SwitchChannel1();
+	SwitchChannel2();
+	SwitchChannel3();
+	ControlChannel3();
 
 	ch1_period_divider += cycles;
 	ch2_period_divider += cycles;
@@ -342,42 +288,45 @@ void APU::UpdateAPUTimers(uint64_t cycles)
 		SDL_PauseAudioDevice(2, 0);
 		audio_clock = clock();
 	}
-
-	WriteState();
 }
 
-void APU::TriggerChannel1()
+void APU::SwitchChannel1()
 {
-	ch1_timer = memory->Get(0xFF11);
-	ch1_envelope = memory->Get(0xFF12);
-	control = memory->Get(0xFF26);
+	if (!Helpers::ExtractBit(ch1_period_high, 7))
+	{
+		return;
+	}
+
 	ch1_length_clock = ch1_timer & 0b00111111;
 	ch1_volume = (ch1_envelope & 0xf0) >> 4;
 	control |= 1;
 }
 
-void APU::TriggerChannel2()
+void APU::SwitchChannel2()
 {
-	ch2_timer = memory->Get(0xFF16);
-	ch2_envelope = memory->Get(0xFF17);
-	control = memory->Get(0xFF26);
+	if (!Helpers::ExtractBit(ch2_period_high, 7))
+	{
+		return;
+	}
 	ch2_length_clock = ch2_timer & 0b00111111;
 	ch2_volume = (ch2_envelope & 0xf0) >> 4;
 	control |= (1 << 1);
 }
 
-void APU::TriggerChannel3()
+void APU::SwitchChannel3()
 {
-	ch3_timer = memory->Get(0xFF1B);
-	control = memory->Get(0xFF26);
+	if (!Helpers::ExtractBit(ch3_period_high, 7))
+	{
+		return;
+	}
+
 	ch1_length_clock = ch3_timer;
 	control |= (1 << 2);
 }
 
-void APU::ControlChannel3(uint8_t value)
+void APU::ControlChannel3()
 {
-	control = memory->Get(0xFF26);
-	if (!Helpers::ExtractBit(value, 7)) { control &= ~(1 << 2); }
+	if (!Helpers::ExtractBit(ch3_dac_enable, 7)) { control &= ~(1 << 2); }
 	else { control |= (1 << 2); }
 }
 

@@ -61,7 +61,6 @@ bool CPU::HandleInterrupts()
 	// Todo: STAT interrupt, TIMA interrupt, Serial interrupt, Joypad interrupt
 	// Todo: halt should be disabled as soon as an interrupt is pending (not necessarily handled)
 
-	interruptEnable = memory->mainMemory[0xFFFF];
 	uint8_t interrupts = interruptEnable & interruptRequests;
 	bool interrupt_handled = false;
 
@@ -98,6 +97,11 @@ bool CPU::HandleInterrupts()
 
 void CPU::StartDMATransfer(uint16_t address)
 {
+	if (DMA_transfer) 
+	{
+		return;
+	}
+
 	DMA_transfer = true;
 	DMA_start = cycles;
 	DMA_address = address;
@@ -2139,26 +2143,14 @@ void CPU::UpdateClock(uint32_t cycleCount)
 		}
 	}
 
-	uint16_t divider_register_address = 0xFF04;
-	uint16_t timer_counter_address = 0xFF05;
-	uint16_t timer_modulo_address = 0xFF06;
-	uint16_t timer_control_address = 0xFF07;
-	uint16_t interrupt_requests_address = 0xFF0F;
-
-	uint8_t divider_register = memory->Get(divider_register_address);
-	uint8_t timer_counter = memory->Get(timer_counter_address);
-	uint8_t timer_modulo = memory->Get(timer_modulo_address);
-	uint8_t timer_control = memory->Get(timer_control_address);
-	uint8_t interrupt_requests = memory->Get(interrupt_requests_address);
-
-	uint8_t previous_div = divider_register;
-	uint16_t previous_div_clock = div_clock;
-	div_clock += cycleCount;
-	divider_register = Helpers::GetHighByte(div_clock);
-	if (divider_register != previous_div)
+	uint8_t previous_div = dividerRegister;
+	uint16_t previous_div_clock = divClock;
+	divClock += cycleCount;
+	dividerRegister = Helpers::GetHighByte(divClock);
+	if (dividerRegister != previous_div)
 	{
 		// DIV-APU clock increments on falling edges of bit 4
-		if (Helpers::ExtractBit(previous_div, 4) && !Helpers::ExtractBit(divider_register, 4))
+		if (Helpers::ExtractBit(previous_div, 4) && !Helpers::ExtractBit(dividerRegister, 4))
 		{
 			apu->StepAPU();
 		}
@@ -2166,24 +2158,23 @@ void CPU::UpdateClock(uint32_t cycleCount)
 
 
 	auto increment_timer = [&]() {
-		if (timer_counter == 0xFF)
+		if (timerCounter == 0xFF)
 		{
 			RequestTimerInterrupt();
-			memory->Set(timer_counter_address, timer_modulo);
+			timerCounter = timerModulo;
 		}
 		else
 		{
-			timer_counter++;
-			memory->Set(timer_counter_address, timer_counter);
+			timerCounter++;
 		}
 	};
 
-	switch (timer_control & 0b11)
+	switch (timerControl & 0b11)
 	{
 	case 0:
 	{
 		// clock / 1024
-		if ((Helpers::ExtractBit(previous_div_clock, 9) && previous_timer_control) && !(Helpers::ExtractBit(div_clock, 9) && Helpers::ExtractBit(timer_control, 2)))
+		if ((Helpers::ExtractBit(previous_div_clock, 9) && previousTimerControl) && !(Helpers::ExtractBit(divClock, 9) && Helpers::ExtractBit(timerControl, 2)))
 		{
 			increment_timer();
 		}
@@ -2193,7 +2184,7 @@ void CPU::UpdateClock(uint32_t cycleCount)
 	case 1:
 	{
 		// clock / 16
-		if ((Helpers::ExtractBit(previous_div_clock, 3) && previous_timer_control) && !(Helpers::ExtractBit(div_clock, 3) && Helpers::ExtractBit(timer_control, 2)))
+		if ((Helpers::ExtractBit(previous_div_clock, 3) && previousTimerControl) && !(Helpers::ExtractBit(divClock, 3) && Helpers::ExtractBit(timerControl, 2)))
 		{
 			increment_timer();
 		}
@@ -2202,7 +2193,7 @@ void CPU::UpdateClock(uint32_t cycleCount)
 	case 2:
 	{
 		// clock / 64
-		if ((Helpers::ExtractBit(previous_div_clock, 5) && previous_timer_control) && !(Helpers::ExtractBit(div_clock, 5) && Helpers::ExtractBit(timer_control, 2)))
+		if ((Helpers::ExtractBit(previous_div_clock, 5) && previousTimerControl) && !(Helpers::ExtractBit(divClock, 5) && Helpers::ExtractBit(timerControl, 2)))
 		{
 			increment_timer();
 		}
@@ -2211,7 +2202,7 @@ void CPU::UpdateClock(uint32_t cycleCount)
 	case 3:
 	{
 		// clock / 256
-		if ((Helpers::ExtractBit(previous_div_clock, 7) && previous_timer_control) && !(Helpers::ExtractBit(div_clock, 7) && Helpers::ExtractBit(timer_control, 2)))
+		if ((Helpers::ExtractBit(previous_div_clock, 7) && previousTimerControl) && !(Helpers::ExtractBit(divClock, 7) && Helpers::ExtractBit(timerControl, 2)))
 		{
 			increment_timer();
 		}
@@ -2219,7 +2210,7 @@ void CPU::UpdateClock(uint32_t cycleCount)
 	}
 	}
 
-	previous_timer_control = Helpers::ExtractBit(timer_control, 2);
+	previousTimerControl = Helpers::ExtractBit(timerControl, 2);
 }
 
 uint8_t CPU::ReadROMLine()
@@ -2485,14 +2476,14 @@ void CPU::LogCPUState()
 {
 	cpu_state << std::format("A:{:02X} F:{:02X} B:{:02X} C:{:02X} D:{:02X} E:{:02X} H:{:02X} L:{:02X} SP:{:04X} PC:{:04X} PCMEM:{:02X},{:02X},{:02X},{:02X}, CYCLE:{:d} TIMER:{:02X} TIMER_CONTROL:{:02X}",
 		registerA, registerF, registerB, registerC, registerD, registerE, registerH, registerL, stackPointer, programCounter,
-		memory->mainMemory[programCounter], memory->mainMemory[programCounter + 1], memory->mainMemory[programCounter + 2], memory->mainMemory[programCounter + 3], cycles, memory->mainMemory[0xFF05], memory->mainMemory[0xFF07]) << std::endl;
+		memory->Get(programCounter), memory->Get(programCounter + 1), memory->Get(programCounter + 2), memory->Get(programCounter + 3), cycles, memory->Get(0xFF05), memory->Get(0xFF07)) << std::endl;
 
 }
 
 void CPU::LogCPUStateDetailed()
 {
 	cpu_state << std::format("A:{:02X} F:{:02X} B:{:02X} C:{:02X} D:{:02X} E:{:02X} H:{:02X} L:{:02X} SP:{:04X} SPMEM:{:02X},{:02X} PC:{:04X} PCMEM:{:02X},{:02X},{:02X},{:02X}, CYCLE:{:d}, PPU_CYCLE:{:d}, LY:{:02X} TIMER:{:02X} TIMER_CONTROL:{:02X} LCDC:{:d}",
-		registerA, registerF, registerB, registerC, registerD, registerE, registerH, registerL, stackPointer, memory->mainMemory[stackPointer], memory->mainMemory[stackPointer + 1], programCounter,
-		memory->mainMemory[programCounter], memory->mainMemory[programCounter + 1], memory->mainMemory[programCounter + 2], memory->mainMemory[programCounter + 3], cycles, ppu->clock, memory->mainMemory[0xFF44], 
-		memory->mainMemory[0xFF05], memory->mainMemory[0xFF07], Helpers::ExtractBit(memory->mainMemory[0xFF40], 7)) << std::endl;
+		registerA, registerF, registerB, registerC, registerD, registerE, registerH, registerL, stackPointer, memory->Get(stackPointer), memory->Get(stackPointer + 1), programCounter,
+		memory->Get(programCounter), memory->Get(programCounter + 1), memory->Get(programCounter + 2), memory->Get(programCounter + 3), cycles, ppu->clock, memory->Get(0xFF44), 
+		memory->Get(0xFF05), memory->Get(0xFF07), Helpers::ExtractBit(memory->Get(0xFF40), 7)) << std::endl;
 }

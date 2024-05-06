@@ -15,7 +15,6 @@ void PPU::Init()
 
 std::array<uint8_t, 256 * 256> PPU::DecodeTileMap()
 {
-	uint8_t LCDControl = memory->mainMemory[0xFF40];
 	uint16_t startAddress = Helpers::ExtractBit(LCDControl, 3) ? 0x9C00 : 0x9800;
 	std::array<uint8_t, 256 * 256> backgroundColors;
 	for (uint32_t tileNum = 0; tileNum < 32 * 32; tileNum++)
@@ -60,9 +59,6 @@ std::array<uint8_t, 256 * 256> PPU::DecodeOAM()
 		element = -1;
 	}
 
-	uint8_t SCY = memory->mainMemory[0xFF42];
-	uint8_t SCX = memory->mainMemory[0xFF43];
-
 	for (auto const& object : sprite_vec)
 	{
 		// Support 8x8 and 8x16 modes
@@ -104,8 +100,6 @@ std::map<std::pair<uint8_t, uint8_t>, uint8_t> PPU::ExtractFullTileMap()
 void PPU::DrawScreen()
 {
 	std::array<uint8_t, 256 * 256> backgroundColors = DecodeTileMap();
-	uint8_t SCY = memory->mainMemory[0xFF42];
-	uint8_t SCX = memory->mainMemory[0xFF43];
 
 	SDL_RenderSetLogicalSize(renderer, 160, 144);
 	SDL_RenderClear(renderer);
@@ -204,7 +198,6 @@ void PPU::RenderTileMap()
 
 std::array<uint8_t, 64> PPU::ExtractTileData(uint8_t offset)
 {
-	uint8_t LCDControl = memory->mainMemory[0xFF40];
 	int8_t signed_offset = offset;
 	bool mapSelect = Helpers::ExtractBit(LCDControl, 4);
 	uint16_t tileAddress = mapSelect ? 0x8000 + 16 * offset : 0x9000 + signed_offset * 16;
@@ -224,7 +217,6 @@ std::array<uint8_t, 64> PPU::ExtractTileData(uint8_t offset)
 
 std::array<uint8_t, 64> PPU::ExtractTileDataUnsigned(uint8_t offset)
 {
-	uint8_t LCDControl = memory->mainMemory[0xFF40];
 	uint16_t tileAddress = 0x8000 + 16 * offset;
 	std::array<uint8_t, 64> colorSelect;
 
@@ -243,19 +235,18 @@ std::array<uint8_t, 64> PPU::ExtractTileDataUnsigned(uint8_t offset)
 
 uint8_t PPU::GetColor(uint8_t index)
 {
-	uint8_t palette = memory->mainMemory[0xFF47];
 	_ASSERTE(index < 4);
 
 	switch (index)
 	{
 	case 0:
-		return (palette & 0b00000011);
+		return (BGPalette & 0b00000011);
 	case 1:
-		return (palette & 0b00001100) >> 2;
+		return (BGPalette & 0b00001100) >> 2;
 	case 2:
-		return (palette & 0b00110000) >> 4;
+		return (BGPalette & 0b00110000) >> 4;
 	case 3:
-		return (palette & 0b11000000) >> 6;
+		return (BGPalette & 0b11000000) >> 6;
 	default:
 		return 0;
 	}
@@ -267,7 +258,7 @@ Mode PPU::CalculatePPUMode(uint64_t offset)
 	uint32_t scanlineClock = (clock + offset) % 456;
 	uint8_t previousScanlineNumber = clock / 456;
 	uint8_t nextScanlineNumber = (clock + offset) / 456;
-	uint8_t LY = memory->mainMemory[0xFF44] + (nextScanlineNumber - previousScanlineNumber);
+	LY += (nextScanlineNumber - previousScanlineNumber);
 
 	if (LY >= 144)
 	{
@@ -296,22 +287,17 @@ void PPU::Update(uint64_t cycleCount)
 	uint64_t previousScanlineNumber = clock / 456;
 	uint64_t nextScanlineNumber = (clock + cycleCount) / 456;
 
-	uint8_t& stat = memory->mainMemory[0xFF41];
 	Mode previousMode = Mode(stat & 0b11);
 	Mode nextMode = CalculatePPUMode(cycleCount);
 
-	uint8_t& control = memory->mainMemory[0xFF40];
-
-	if (!Helpers::ExtractBit(control, 7))
+	if (!Helpers::ExtractBit(LCDControl, 7))
 	{
-		WriteScanlineY(0);
+		LY = 0;
 		clock = 0;
 		stat &= 0b11111100;
 		return;
 	}
 
-
-	uint8_t& interruptRequests = memory->mainMemory[0xFF0F];
 
 	stat &= 0b11111100;
 	stat |= uint8_t(nextMode);
@@ -326,22 +312,20 @@ void PPU::Update(uint64_t cycleCount)
 		if (nextMode == Mode::Hblank && Helpers::ExtractBit(stat, 3) || nextMode == Mode::Vblank && Helpers::ExtractBit(stat, 4)
 			|| nextMode == Mode::OAMSearch && Helpers::ExtractBit(stat, 5) || nextMode == Mode::PixelTransfer && Helpers::ExtractBit(stat, 6))
 		{
-			interruptRequests |= (1 << 1);
+			cpu->RequestStatInterrupt();
 		}
 	}
 
 	if (nextScanlineNumber != previousScanlineNumber)
 	{
-		uint8_t LY = memory->mainMemory[0xFF44];
-		uint8_t LYC = memory->mainMemory[0xFF45];
-		WriteScanlineY(nextScanlineNumber);
+		LY = nextScanlineNumber;
 
 		if (LY == LYC)
 		{
 			stat |= (1 << 2);
 			if (Helpers::ExtractBit(stat, 6))
 			{
-				interruptRequests |= (1 << 1);
+				cpu->RequestStatInterrupt();
 			}
 		}
 
@@ -356,8 +340,6 @@ void PPU::Update(uint64_t cycleCount)
 
 bool PPU::CheckPPUtoVRAMAccess()
 {
-	uint8_t LCDControl = memory->mainMemory[0xFF40];
-	uint8_t LY = memory->mainMemory[0xFF44];
 	bool LCDOn = Helpers::ExtractBit(LCDControl, 7);
 	bool scanlineZero = LY == 0;
 
@@ -367,12 +349,6 @@ bool PPU::CheckPPUtoVRAMAccess()
 	bool modeAllowsAccess = currentMode == Mode::PixelTransfer;
 
 	return LCDOn && (scanlineZero || modeAllowsAccess);
-}
-
-
-void PPU::WriteScanlineY(uint8_t value)
-{
-	memory->mainMemory[0xFF44] = value;
 }
 
 void PPU::Terminate()

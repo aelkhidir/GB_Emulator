@@ -53,10 +53,16 @@ public:
 	bool IME = 0;
 	bool systemClockActive = 1;
 	bool mainClockActive = 1;
-	uint16_t div_clock = 0;
-	bool previous_timer_control = false;
+	uint16_t divClock = 0;
+	bool previousTimerControl = false;
 	uint8_t interruptEnable;
 	uint8_t interruptRequests;
+
+	// Timer stuff
+	uint8_t dividerRegister;
+	uint8_t timerCounter;
+	uint8_t timerModulo;
+	uint8_t timerControl;
 
 	bool haltMode = false;
 	bool haltBug = false;
@@ -124,6 +130,8 @@ public:
 	void EnableInterrupts(uint8_t opcode);
 	void Nop(uint8_t opcode);
 	void UpdateClock(uint32_t cycleCount);
+	void ReadStateFromMemory();
+	void WriteStateToMemory();
 	std::string RegisterToString(uint8_t reg);
 	std::string RegisterToString16(uint8_t reg);
 	std::string InstructionToString(Instruction instruction);

@@ -14,6 +14,7 @@
 #include<cstdint>
 
 class APU;
+class PPU;
 class CPU;
 class Joypad;
 class GameBoy;
@@ -73,11 +74,12 @@ public:
 
 	// Pointers needed to trigger events on memory read/write
 	CPU* cpu;
+	PPU* ppu;
 	APU* apu;
 	Joypad* joypad;
 	GameBoy* gameboy;
 
-	void SetPointers(CPU* cpu_pointer, APU* apu_pointer, Joypad* joypad_pointer, GameBoy* gameboy_pointer);
+	void SetPointers(CPU* cpu_pointer, PPU* ppu_pointer, APU* apu_pointer, Joypad* joypad_pointer, GameBoy* gameboy_pointer);
 	void UnmapBootRom();
 	void LoadRom(std::string filename, uint16_t startAddress);
 	void LoadCartridge(std::string filename);
@@ -88,10 +90,14 @@ public:
 	//bool CanAccessOAM();
 	uint8_t Read(uint16_t address);
 	uint8_t ReadMappedAddress(uint16_t address);
+	uint8_t ReadRegisterAddress(uint16_t address);
+	void WriteRegisterAddress(uint8_t value, uint16_t address);
 	void Write(uint8_t value, uint16_t address);
+	void WriteMappedAddress(uint8_t value, uint16_t address);
 	uint8_t Get(uint16_t address); 
 	void Set(uint16_t address, uint8_t value); // No clock penalty, used for updating the state internally
 	void SelectMemoryBank();
 	void LogMemoryState();
+	
 
 };

@@ -14,7 +14,7 @@ GameBoy::GameBoy()
 	joypad = new Joypad(memory, cpu);
 	ppu = new PPU(memory, cpu);
 	apu = new APU(memory);
-	memory->SetPointers(cpu, apu, joypad, this);
+	memory->SetPointers(cpu, ppu, apu, joypad, this);
 	cpu->SetPointers(memory, apu, ppu, this);
 }
 
@@ -70,7 +70,7 @@ void GameBoy::ExecutionLoop()
 
 		if (ppu->clock >= 70224)
 		{
-			if (Helpers::ExtractBit(memory->mainMemory[0xFF40], 7) && Helpers::ExtractBit(memory->mainMemory[0xFF40], 0))
+			if (Helpers::ExtractBit(ppu->LCDControl, 7) && Helpers::ExtractBit(ppu->LCDControl, 0))
 			{
 				ppu->DrawScreen();
 				WaitForFrameTime();
@@ -113,7 +113,7 @@ void GameBoy::LoadCartridge(std::string filename)
 void GameBoy::UpdateClock(uint32_t cycleCount)
 {
 	ppu->Update(cycleCount);
-	apu->UpdateAPUTimers(cycleCount);
+	apu->Update(cycleCount);
 	cpu->UpdateClock(cycleCount);
 	memory->UpdateClock(cycleCount);
 }
