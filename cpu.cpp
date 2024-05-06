@@ -61,6 +61,7 @@ bool CPU::HandleInterrupts()
 	// Todo: STAT interrupt, TIMA interrupt, Serial interrupt, Joypad interrupt
 	// Todo: halt should be disabled as soon as an interrupt is pending (not necessarily handled)
 
+	interruptEnable = memory->mainMemory[0xFFFF];
 	uint8_t interrupts = interruptEnable & interruptRequests;
 	bool interrupt_handled = false;
 

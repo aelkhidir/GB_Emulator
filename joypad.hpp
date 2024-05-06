@@ -27,5 +27,6 @@ public:
 	uint8_t previous_joypad;
 
 
-	void UpdateJoypadInput();
+	uint8_t GetJoypadInput();
+	void SetJoypadValue(uint8_t value);
 };

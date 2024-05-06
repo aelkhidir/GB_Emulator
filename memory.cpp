@@ -169,7 +169,8 @@ uint8_t Memory::Read(uint16_t address)
 
 	if (address == 0xFF00)
 	{
-		joypad->UpdateJoypadInput();
+		mainMemory[0xFF00] = joypad->GetJoypadInput();
+		return mainMemory[0xFF00];
 	}
 
 	if (mbcState == MBC::MBC1)
@@ -350,9 +351,9 @@ void Memory::Write(uint8_t value, uint16_t address)
 		apu->ControlChannel3(value);
 	}
 
-	if (address >= 0x8000 && address < 0xA000 && CanAccessVRAM())
+	if (address == 0xFF00)
 	{
-		memory_state << std::format("Writing {:02X} to address {:04X} in VRAM\n", value, address);
+		joypad->SetJoypadValue(value);
 	}
 
 	mainMemory[address] = value;

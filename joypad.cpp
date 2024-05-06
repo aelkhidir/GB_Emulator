@@ -4,7 +4,7 @@
 #include "helpers.hpp"
 
 
-void Joypad::UpdateJoypadInput()
+uint8_t Joypad::GetJoypadInput()
 {
 	auto setBit = [&](uint8_t num, bool state) {
 		joypad &= ~(1 << num);
@@ -63,6 +63,13 @@ void Joypad::UpdateJoypadInput()
 	}
 
 	previous_joypad = joypad;
+	return joypad;
 }
 
+
+void Joypad::SetJoypadValue(uint8_t value) 
+{
+	previous_joypad = joypad;
+	joypad = value;
+};
 

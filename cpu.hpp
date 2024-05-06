@@ -70,7 +70,7 @@ public:
 	PPU* ppu;
 	GameBoy* gameboy;
 
-	bool printLogs = true;
+	bool printLogs = false;
 
 	std::ofstream cpu_state;
 
