@@ -142,6 +142,8 @@ void Memory::SetToPostBootState()
 	Set(0xFF6B, 0xFF);
 	Set(0xFF70, 0xFF);
 	Set(0xFFFF, 0x00);
+
+	LogMemoryState();
 }
 
 void Memory::UpdateClock(uint64_t cycles)
@@ -247,11 +249,11 @@ uint8_t Memory::ReadRegisterAddress(uint16_t address)
 	case 0xFF0F: return cpu->interruptRequests;
 	case 0xFF10: return apu->ch1_sweep;
 	case 0xFF11: return apu->ch1_length_clock;
-	case 0xFF12: return apu->ch1_volume;
+	case 0xFF12: return apu->ch1_envelope;
 	case 0xFF13: return apu->ch1_period_low;
 	case 0xFF14: return apu->ch1_period_high;
 	case 0xFF16: return apu->ch2_length_clock;
-	case 0xFF17: return apu->ch2_volume;
+	case 0xFF17: return apu->ch2_envelope;
 	case 0xFF18: return apu->ch1_period_low;
 	case 0xFF19: return apu->ch2_period_high;
 	case 0xFF1A: return apu->ch3_dac_enable;
@@ -277,7 +279,7 @@ uint8_t Memory::ReadRegisterAddress(uint16_t address)
 	case 0xFF49: return ppu->OBP1;
 	case 0xFF50: return mainMemory[0xFF50];
 	default:
-		_ASSERT(false);
+		return mainMemory[address];
 	}
 }
 
@@ -313,18 +315,18 @@ void Memory::WriteRegisterAddress(uint8_t value, uint16_t address)
 	case 0xFF0f: cpu->interruptRequests = value; return;
 	case 0xFF10: apu->ch1_sweep = value; return;
 	case 0xFF11: apu->ch1_length_clock = value; return;
-	case 0xFF12: apu->ch1_volume = value; return;
+	case 0xFF12: apu->ch1_envelope = value; return;
 	case 0xFF13: apu->ch1_period_low = value; return;
-	case 0xFF14: apu->ch1_period_high = value; return;
+	case 0xFF14: apu->ch1_period_high = value; apu->SwitchChannel1(); return;
 	case 0xFF16: apu->ch2_length_clock = value; return;
-	case 0xFF17: apu->ch2_volume = value; return;
+	case 0xFF17: apu->ch2_envelope = value; return;
 	case 0xFF18: apu->ch1_period_low = value; return;
-	case 0xFF19: apu->ch2_period_high = value; return;
-	case 0xFF1A: apu->ch3_dac_enable = value; return;
+	case 0xFF19: apu->ch2_period_high = value; apu->SwitchChannel2(); return;
+	case 0xFF1A: apu->ch3_dac_enable = value; apu->ControlChannel3(); return;
 	case 0xFF1B: apu->ch3_length_clock = value; return;
 	case 0xFF1C: apu->ch3_output_level = value; return;
 	case 0xFF1D: apu->ch3_period_low = value; return;
-	case 0xFF1E: apu->ch3_period_high = value; return;
+	case 0xFF1E: apu->ch3_period_high = value; apu->SwitchChannel3(); return;
 	case 0xFF20: apu->ch4_timer = value; return;
 	case 0xFF21: apu->ch4_envelope = value; return;
 	case 0xFF22: apu->ch4_frequency = value; return;
@@ -392,6 +394,12 @@ void Memory::Write(uint8_t value, uint16_t address)
 		return;
 	}
 
+	if (mbcState == MBC::MBC1)
+	{
+		return WriteMappedAddress(value, address);
+	}
+
+
 	mainMemory[address] = value;
 }
 
@@ -447,6 +455,9 @@ void Memory::WriteMappedAddress(uint8_t value, uint16_t address)
 			externalRAM[mapped_address] = value;
 			return;
 		}
+
+		mainMemory[address] = value;
+		return;
 	}
 }
 
