@@ -33,6 +33,11 @@ void GameBoy::Reset()
 	apu->InitAPU();
 }
 
+void GameBoy::SetLogging(bool printCPULogs)
+{
+	cpu->printLogs = printCPULogs;
+}
+
 void GameBoy::SetToPostBootState()
 {
 	Reset();
@@ -45,7 +50,6 @@ void GameBoy::ExecutionLoop()
 {
 	while (true)
 	{
-		/*if (cpu_cycles == 494400) { __debugbreak(); }*/
 		if (!cpu->haltMode && cpu->printLogs)
 		{
 			cpu->LogCPUStateDetailed();

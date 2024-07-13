@@ -142,6 +142,8 @@ void Memory::SetToPostBootState()
 	Set(0xFF6B, 0xFF);
 	Set(0xFF70, 0xFF);
 	Set(0xFFFF, 0x00);
+
+	LogMemoryState();
 }
 
 void Memory::UpdateClock(uint64_t cycles)
@@ -152,6 +154,8 @@ void Memory::UpdateClock(uint64_t cycles)
 uint8_t Memory::Read(uint16_t address)
 {
 	gameboy->UpdateClock(4);
+
+	//memory_state << std::format("Read: {:4X}", address) << std::endl;
 
 	if (address >= 0xFF00 && address <= 0xFF7F)
 	{
@@ -185,15 +189,17 @@ uint8_t Memory::ReadMappedAddress(uint16_t address)
 {
 	// Only MBC1 is implemented here
 	uint8_t address_bank = 0;
-	uint16_t mapped_address = 0;
+	uint32_t mapped_address = 0;
 	if (address <= 0x3FFF)
 	{
 		if (bankMode)
 		{
 			address_bank = secondaryBankRegister;
-			mapped_address = 0x4000 * address_bank + (address % 0x4000);
+			mapped_address = 0x4000 * 0x20 * address_bank + (address % 0x4000);
 			return cartridgeMemory[mapped_address];
 		}
+
+		return cartridgeMemory[address];
 	}
 
 	else if (address <= 0x7FFF)
@@ -208,7 +214,7 @@ uint8_t Memory::ReadMappedAddress(uint16_t address)
 		address_bank = bankMode ? secondaryBankRegister : 0;
 
 		// Check if RAM can be accessed and implement external RAM accesses
-		if (false)
+		if (true)
 		{
 			return 0x00;
 		}
@@ -218,7 +224,7 @@ uint8_t Memory::ReadMappedAddress(uint16_t address)
 			return mainMemory[address];
 		}
 
-		mapped_address = 0x2000 * (address_bank - 1) + (address % 0x2000);
+		mapped_address = 0x2000 * address_bank + (address % 0x2000);
 		return externalRAM[mapped_address];
 	}
 
@@ -364,6 +370,8 @@ void Memory::Write(uint8_t value, uint16_t address)
 {
 	gameboy->UpdateClock(4);	
 
+	//memory_state << std::format("Write: {:4X} <- {:2X}", address, value) << std::endl;
+
 	if (address >= 0xFF00 && address <= 0xFF7F)
 	{
 		WriteRegisterAddress(value, address);
@@ -379,6 +387,10 @@ void Memory::Write(uint8_t value, uint16_t address)
 	// Cartridge memory
 	if (address >= 0x0000 && address <= 0x7FFF)
 	{
+		if (mbcState == MBC::MBC1)
+		{
+			WriteMappedAddress(value, address);
+		}
 		return;
 	}
 
@@ -392,11 +404,7 @@ void Memory::Write(uint8_t value, uint16_t address)
 		return;
 	}
 
-	if (mbcState == MBC::MBC1)
-	{
-		return WriteMappedAddress(value, address);
-	}
-
+	
 	mainMemory[address] = value;
 }
 
@@ -549,6 +557,6 @@ void Memory::LogMemoryState()
 {
 	for (uint32_t i = 0; i < 0x10000; i++)
 	{
-		memory_state << unsigned(mainMemory[i]) << std::endl;
+		memory_state << std::format("{:04X} <- {:02X}", i, mainMemory[i]) << std::endl;
 	}
 }
