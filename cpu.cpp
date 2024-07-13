@@ -2152,7 +2152,7 @@ void CPU::UpdateClock(uint32_t cycleCount)
 		// DIV-APU clock increments on falling edges of bit 4
 		if (Helpers::ExtractBit(previous_div, 4) && !Helpers::ExtractBit(dividerRegister, 4))
 		{
-			apu->StepAPU();
+			apu->IncrementDivAPU();
 		}
 	}
 
@@ -2474,7 +2474,7 @@ std::string CPU::ConditionToString(uint8_t condition)
 
 void CPU::LogCPUState()
 {
-	cpu_state << std::format("A:{:02X} F:{:02X} B:{:02X} C:{:02X} D:{:02X} E:{:02X} H:{:02X} L:{:02X} SP:{:04X} PC:{:04X} PCMEM:{:02X},{:02X},{:02X},{:02X}, CYCLE:{:d} TIMER:{:02X} TIMER_CONTROL:{:02X}",
+	cpu_state << std::format("A:{:02X} F:{:02X} B:{:02X} C:{:02X} D:{:02X} E:{:02X} H:{:02X} L:{:02X} SP:{:04X} PC:{:04X} PCMEM:{:02X},{:02X},{:02X},{:02X}",
 		registerA, registerF, registerB, registerC, registerD, registerE, registerH, registerL, stackPointer, programCounter,
 		memory->Get(programCounter), memory->Get(programCounter + 1), memory->Get(programCounter + 2), memory->Get(programCounter + 3), cycles, memory->Get(0xFF05), memory->Get(0xFF07)) << std::endl;
 
@@ -2482,7 +2482,7 @@ void CPU::LogCPUState()
 
 void CPU::LogCPUStateDetailed()
 {
-	cpu_state << std::format("A:{:02X} F:{:02X} B:{:02X} C:{:02X} D:{:02X} E:{:02X} H:{:02X} L:{:02X} SP:{:04X} SPMEM:{:02X},{:02X} PC:{:04X} PCMEM:{:02X},{:02X},{:02X},{:02X}, CYCLE:{:d}, PPU_CYCLE:{:d}, LY:{:02X} TIMER:{:02X} TIMER_CONTROL:{:02X} LCDC:{:d}",
+	cpu_state << std::format("A:{:02X} F:{:02X} B:{:02X} C:{:02X} D:{:02X} E:{:02X} H:{:02X} L:{:02X} SP:{:04X} SPMEM:{:02X},{:02X} PC:{:04X} PCMEM:{:02X},{:02X},{:02X},{:02X} CYCLE:{:d} PPU_CYCLE:{:d} LY:{:02X} TIMER:{:02X} TIMER_CONTROL:{:02X} LCDC:{:d}",
 		registerA, registerF, registerB, registerC, registerD, registerE, registerH, registerL, stackPointer, memory->Get(stackPointer), memory->Get(stackPointer + 1), programCounter,
 		memory->Get(programCounter), memory->Get(programCounter + 1), memory->Get(programCounter + 2), memory->Get(programCounter + 3), cycles, ppu->clock, memory->Get(0xFF44), 
 		memory->Get(0xFF05), memory->Get(0xFF07), Helpers::ExtractBit(memory->Get(0xFF40), 7)) << std::endl;

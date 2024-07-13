@@ -142,8 +142,6 @@ void Memory::SetToPostBootState()
 	Set(0xFF6B, 0xFF);
 	Set(0xFF70, 0xFF);
 	Set(0xFFFF, 0x00);
-
-	LogMemoryState();
 }
 
 void Memory::UpdateClock(uint64_t cycles)
@@ -398,7 +396,6 @@ void Memory::Write(uint8_t value, uint16_t address)
 	{
 		return WriteMappedAddress(value, address);
 	}
-
 
 	mainMemory[address] = value;
 }
