@@ -101,8 +101,11 @@ std::array<uint8_t, 256 * 256> PPU::DecodeOAM(std::array<uint8_t, 256 * 256>& co
 				uint32_t offsetY = pixelNum / 8;
 
 				uint32_t indexX = flipX ? baseX - offsetX : baseX + offsetX - 8;
+				indexX %= 256;
 				uint32_t topIndexY = flipY ? baseY - offsetY - 8 : baseY + offsetY - 16;
+				topIndexY %= 256;
 				uint32_t bottomIndexY = flipY ? baseY - offsetY : baseY + offsetY - 8;
+				bottomIndexY %= 256;
 
 				uint32_t topIndex = indexX + 256 * topIndexY;
 				uint32_t bottomIndex = indexX + 256 * bottomIndexY;
@@ -134,7 +137,9 @@ std::array<uint8_t, 256 * 256> PPU::DecodeOAM(std::array<uint8_t, 256 * 256>& co
 				uint32_t offsetY = pixelNum / 8;
 
 				uint32_t indexX = flipX ? baseX - offsetX : baseX + offsetX - 8;
+				indexX %= 256;
 				uint32_t indexY = flipY ? baseY - offsetY - 8 : baseY + offsetY - 16;
+				indexY %= 256;
 
 				uint32_t index = indexX + 256 * indexY;
 
