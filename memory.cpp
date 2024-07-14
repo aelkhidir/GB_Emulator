@@ -281,6 +281,8 @@ uint8_t Memory::ReadRegisterAddress(uint16_t address)
 	case 0xFF47: return ppu->BGPalette;
 	case 0xFF48: return ppu->OBP0;
 	case 0xFF49: return ppu->OBP1;
+	case 0xFF4A: return ppu->WY;
+	case 0xFF4B: return ppu->WXplus7;
 	case 0xFF50: return mainMemory[0xFF50];
 	default:
 		return mainMemory[address];
@@ -353,6 +355,8 @@ void Memory::WriteRegisterAddress(uint8_t value, uint16_t address)
 	case 0xFF47: ppu->BGPalette = value; return;
 	case 0xFF48: ppu->OBP0 = value; return;
 	case 0xFF49: ppu->OBP1 = value; return;
+	case 0xFF4A: ppu->WY = value; return;
+	case 0xFF4B: ppu->WXplus7 = value; return;
 	case 0xFF50: 
 	{
 		if (value != 0)

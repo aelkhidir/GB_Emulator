@@ -54,6 +54,8 @@ public:
 	uint8_t stat;
 	uint8_t SCY;
 	uint8_t SCX;
+	uint8_t WY;
+	uint8_t WXplus7;
 	uint8_t LY;
 	uint8_t LYC;
 	uint8_t BGPalette;
@@ -65,6 +67,7 @@ public:
 	void Init();
 	std::array<uint8_t, 256 * 256> DecodeTileMap();
 	std::array<uint8_t, 256 * 256> DecodeOAM(std::array<uint8_t, 256 * 256>& colorChoices);
+	void OverlayWindow(std::array<uint8_t, 256 * 256>& colorChoices);
 	std::array<uint8_t, 64> ExtractTileData(uint8_t offset);
 	std::array<uint8_t, 64> ExtractTileDataUnsigned(uint8_t offset);
 	uint8_t GetColor(uint8_t index);

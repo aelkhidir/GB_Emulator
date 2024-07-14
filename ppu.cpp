@@ -158,16 +158,61 @@ std::array<uint8_t, 256 * 256> PPU::DecodeOAM(std::array<uint8_t, 256 * 256>& co
 	return spriteColors;
 }
 
+void PPU::OverlayWindow(std::array<uint8_t, 256 * 256>& colorChoices)
+{
+	if (!Helpers::ExtractBit(LCDControl, 5))
+	{
+		return;
+	}
+
+	std::array<uint8_t, 256 * 256> windowColorChoices;
+	uint16_t startAddress = Helpers::ExtractBit(LCDControl, 6) ? 0x9C00 : 0x9800;
+
+	for (uint32_t tileNum = 0; tileNum < 32 * 32; tileNum++)
+	{
+		std::array<uint8_t, 64> tileData = ExtractTileData(memory->mainMemory[startAddress + tileNum]);
+		uint32_t baseX = (tileNum % 32) * 8;
+		uint32_t baseY = (tileNum / 32) * 8;
+
+		for (uint32_t pixelNum = 0; pixelNum < 64; pixelNum++)
+		{
+			uint32_t offsetX = pixelNum % 8;
+			uint32_t offsetY = pixelNum / 8;
+			windowColorChoices[(baseX + offsetX) + 256 * (baseY + offsetY)] = tileData[pixelNum];
+		}
+	}
+
+	uint32_t startX = SCX + WXplus7 - 7;
+	uint32_t startY = SCY + WY;
+
+	for (uint32_t offsetX = 0; offsetX < 256; offsetX++)
+	{
+		for (uint32_t offsetY = 0; offsetY < 256; offsetY++)
+		{
+			uint32_t X = startX + offsetX;
+			uint32_t Y = startY + offsetY;
+
+			if (X >= SCX && X < (SCX + 160) && Y >= SCY && Y < (SCY + 144))
+			{
+				colorChoices[X + 256 * Y] = windowColorChoices[offsetX + 256 * offsetY];
+			}
+		}
+	}
+}
+
 void PPU::DrawScreen()
 {
 	SDL_RenderSetLogicalSize(renderer, 160, 144);
 	SDL_RenderClear(renderer);
 
 	// Background (color decoding is delayed here because we use the raw palette to decide on BG-OBJ priority in DecodeOAM)
-	std::array<uint8_t, 256 * 256> backgroundColorChoices = DecodeTileMap();
+	std::array<uint8_t, 256 * 256> colorChoices = DecodeTileMap();
+
+	// Window
+	OverlayWindow(colorChoices);
 
 	// Objects
-	std::array<uint8_t, 256 * 256> spriteColors = DecodeOAM(backgroundColorChoices);
+	std::array<uint8_t, 256 * 256> spriteColors = DecodeOAM(colorChoices);
 
 	std::array<uint8_t, 256 * 256> finalColors;
 
@@ -180,7 +225,7 @@ void PPU::DrawScreen()
 
 		else
 		{
-			finalColors[index] = GetColor(backgroundColorChoices[index]);
+			finalColors[index] = GetColor(colorChoices[index]);
 		}
 	}
 
