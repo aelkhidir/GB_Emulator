@@ -64,10 +64,11 @@ public:
 
 	void Init();
 	std::array<uint8_t, 256 * 256> DecodeTileMap();
-	std::array<uint8_t, 256 * 256> DecodeOAM();
+	std::array<uint8_t, 256 * 256> DecodeOAM(std::array<uint8_t, 256 * 256>& colorChoices);
 	std::array<uint8_t, 64> ExtractTileData(uint8_t offset);
 	std::array<uint8_t, 64> ExtractTileDataUnsigned(uint8_t offset);
 	uint8_t GetColor(uint8_t index);
+	uint8_t GetObjectColor(uint8_t index, bool paletteChoice);
 	void DrawScreen();
 	void RenderTileMap();
 	Mode CalculatePPUMode(uint64_t offset = 0);

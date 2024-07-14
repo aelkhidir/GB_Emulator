@@ -39,6 +39,7 @@ private:
 
 public:
 	void Reset();
+	void SetLogging(bool printCPULogs);
 	void SetToPostBootState();
 	void ExecutionLoop();
 	void WaitForFrameTime();

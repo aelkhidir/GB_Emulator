@@ -27,55 +27,10 @@ std::array<uint8_t, 256 * 256> PPU::DecodeTileMap()
 		{
 			uint32_t offsetX = pixelNum % 8;
 			uint32_t offsetY = pixelNum / 8;
-			backgroundColors[(baseX + offsetX) + 256 * (baseY + offsetY)] = GetColor(tileData[pixelNum]);
+			backgroundColors[(baseX + offsetX) + 256 * (baseY + offsetY)] = tileData[pixelNum];
 		}
 	}
 	return backgroundColors;
-}
-
-
-std::array<uint8_t, 256 * 256> PPU::DecodeOAM()
-{
-	struct sprite
-	{
-		uint8_t Y;
-		uint8_t X;
-		uint8_t tile_index;
-		uint8_t flags;
-	};
-
-	std::vector<sprite> sprite_vec;
-	for (uint16_t address = 0xFE00; address < 0xFE9F; address += 4)
-	{
-		sprite_vec.emplace_back(memory->mainMemory[address], memory->mainMemory[address + 1], memory->mainMemory[address + 2], memory->mainMemory[address + 3]);
-	}
-
-	std::array<uint8_t, 256 * 256> sprite_colors;
-
-	// Unused space is -1
-	// todo: std optional?
-	for (auto& element : sprite_colors)
-	{
-		element = -1;
-	}
-
-	for (auto const& object : sprite_vec)
-	{
-		// Support 8x8 and 8x16 modes
-		std::array<uint8_t, 64> tileData = ExtractTileDataUnsigned(object.tile_index);
-		uint32_t baseX = SCX + object.X;
-		uint32_t baseY = SCY + object.Y;
-		for (uint32_t pixelNum = 0; pixelNum < 64; pixelNum++)
-		{
-			uint32_t offsetX = pixelNum % 8;
-			uint32_t offsetY = pixelNum / 8;
-			if (offsetY + object.Y >= 16 && offsetX + object.X >= 8)
-			{
-				sprite_colors[(baseX + offsetX - 8) + 256 * (baseY + offsetY - 16)] = GetColor(tileData[pixelNum]);
-			}
-		}
-	}
-	return sprite_colors;
 }
 
 std::map<std::pair<uint8_t, uint8_t>, uint8_t> PPU::ExtractFullTileMap()
@@ -91,42 +46,145 @@ std::map<std::pair<uint8_t, uint8_t>, uint8_t> PPU::ExtractFullTileMap()
 		{
 			uint32_t offsetX = pixelNum % 8;
 			uint32_t offsetY = pixelNum / 8;
-			backgroundColors[{baseX + offsetX, baseY + offsetY}] = GetColor(tileData[pixelNum]);
+			backgroundColors[{baseX + offsetX, baseY + offsetY}] = tileData[pixelNum];
 		}
 	}
 	return backgroundColors;
 }
 
-void PPU::DrawScreen()
+std::array<uint8_t, 256 * 256> PPU::DecodeOAM(std::array<uint8_t, 256 * 256>& colorChoices)
 {
-	std::array<uint8_t, 256 * 256> backgroundColors = DecodeTileMap();
-
-	SDL_RenderSetLogicalSize(renderer, 160, 144);
-	SDL_RenderClear(renderer);
-
-	// Background/Window
-	for (uint8_t offsetX = 0; offsetX < 160; offsetX++)
+	struct sprite
 	{
-		for (uint8_t offsetY = 0; offsetY < 144; offsetY++)
+		uint8_t Y;
+		uint8_t X;
+		uint8_t tile_index;
+		uint8_t flags;
+	};
+
+	std::vector<sprite> sprite_vec;
+	for (uint16_t address = 0xFE00; address < 0xFE9F; address += 4)
+	{
+		sprite_vec.emplace_back(memory->mainMemory[address], memory->mainMemory[address + 1], memory->mainMemory[address + 2], memory->mainMemory[address + 3]);
+	}
+
+	std::array<uint8_t, 256 * 256> spriteColors;
+
+	for (auto& element : spriteColors)
+	{
+		element = -1;
+	}
+
+	bool doubleSpriteMode = Helpers::ExtractBit(LCDControl, 2);
+
+	for (auto const& object : sprite_vec)
+	{
+		uint32_t baseX = SCX + object.X;
+		uint32_t baseY = SCY + object.Y;
+
+		bool paletteChoice = Helpers::ExtractBit(object.flags, 4);
+		bool flipX = Helpers::ExtractBit(object.flags, 5);
+		bool flipY = Helpers::ExtractBit(object.flags, 6);
+		bool backgroundHasPriority = Helpers::ExtractBit(object.flags, 7);
+
+
+		if (doubleSpriteMode)
 		{
-			uint8_t color = 255 - 85 * backgroundColors[((SCX + offsetX) % 256) + 256 * ((SCY + offsetY) % 256)];
-			SDL_SetRenderDrawColor(renderer, color, color, color, 255);
-			SDL_RenderDrawPoint(renderer, offsetX, offsetY);
+			uint8_t topIndex = object.tile_index & 0xFE;
+			uint8_t bottomIndex = object.tile_index | 0x01;
+			std::array<uint8_t, 64> topTileData = ExtractTileDataUnsigned(topIndex);
+			std::array<uint8_t, 64> bottomTileData = ExtractTileDataUnsigned(bottomIndex);
+
+			for (uint32_t pixelNum = 0; pixelNum < 64; pixelNum++)
+			{
+				uint32_t offsetX = pixelNum % 8;
+				uint32_t offsetY = pixelNum / 8;
+
+				uint32_t indexX = flipX ? baseX - offsetX : baseX + offsetX - 8;
+				uint32_t topIndexY = flipY ? baseY - offsetY - 8 : baseY + offsetY - 16;
+				uint32_t bottomIndexY = flipY ? baseY - offsetY : baseY + offsetY - 8;
+
+				uint32_t topIndex = indexX + 256 * topIndexY;
+				uint32_t bottomIndex = indexX + 256 * bottomIndexY;
+
+				if (offsetY + object.Y >= 16 && offsetX + object.X >= 8)
+				{
+					bool drawTopPixel = (!backgroundHasPriority || (colorChoices[topIndex] == 0)) && (topTileData[pixelNum] != 0);
+					if (drawTopPixel)
+					{
+						spriteColors[topIndex] = GetObjectColor(topTileData[pixelNum], paletteChoice);
+					}
+
+					bool drawBottomPixel = (!backgroundHasPriority || (colorChoices[bottomIndex] == 0)) && (bottomTileData[pixelNum] != 0);
+					if (drawBottomPixel)
+					{
+						spriteColors[bottomIndex] = GetObjectColor(bottomTileData[pixelNum], paletteChoice);
+					}
+				}
+			}
+		}
+
+		else
+		{
+			std::array<uint8_t, 64> tileData = ExtractTileDataUnsigned(object.tile_index);
+
+			for (uint32_t pixelNum = 0; pixelNum < 64; pixelNum++)
+			{
+				uint32_t offsetX = pixelNum % 8;
+				uint32_t offsetY = pixelNum / 8;
+
+				uint32_t indexX = flipX ? baseX - offsetX : baseX + offsetX - 8;
+				uint32_t indexY = flipY ? baseY - offsetY - 8 : baseY + offsetY - 16;
+
+				uint32_t index = indexX + 256 * indexY;
+
+				if (offsetY + object.Y >= 16 && offsetX + object.X >= 8)
+				{
+					bool drawPixel = (!backgroundHasPriority || (colorChoices[index] == 0)) && (tileData[pixelNum] != 0);
+					if (drawPixel)
+					{
+						spriteColors[index] = GetObjectColor(tileData[pixelNum], paletteChoice);
+					}
+				}
+			}
 		}
 	}
 
+	return spriteColors;
+}
+
+void PPU::DrawScreen()
+{
+	SDL_RenderSetLogicalSize(renderer, 160, 144);
+	SDL_RenderClear(renderer);
+
+	// Background (color decoding is delayed here because we use the raw palette to decide on BG-OBJ priority in DecodeOAM)
+	std::array<uint8_t, 256 * 256> backgroundColorChoices = DecodeTileMap();
+
 	// Objects
-	std::array<uint8_t, 256 * 256> objectColors = DecodeOAM();
+	std::array<uint8_t, 256 * 256> spriteColors = DecodeOAM(backgroundColorChoices);
+
+	std::array<uint8_t, 256 * 256> finalColors;
+
+	for (uint32_t index = 0; index < 256 * 256; index++)
+	{
+		if (spriteColors[index] != 0xff)
+		{
+			finalColors[index] = spriteColors[index];
+		}
+
+		else
+		{
+			finalColors[index] = GetColor(backgroundColorChoices[index]);
+		}
+	}
+
 	for (uint8_t offsetX = 0; offsetX < 160; offsetX++)
 	{
 		for (uint8_t offsetY = 0; offsetY < 144; offsetY++)
 		{
-			uint8_t color_index = objectColors[((SCX + offsetX) % 256) + 256 * ((SCY + offsetY) % 256)];
-			if (color_index == 0xff)
-			{
-				continue;
-			}
-			uint8_t color = 255 - 85 * color_index;
+			uint32_t index = ((SCX + offsetX) % 256) + 256 * ((SCY + offsetY) % 256);
+			uint8_t color = 255 - 85 * finalColors[index];
 			SDL_SetRenderDrawColor(renderer, color, color, color, 255);
 			SDL_RenderDrawPoint(renderer, offsetX, offsetY);
 		}
@@ -145,7 +203,7 @@ void PPU::DrawFullBackground()
 	{
 		for (uint16_t offsetY = 0; offsetY < 256; offsetY++)
 		{
-			uint8_t color = 255 - 85 * backgroundColors[offsetX + 256 * offsetY];
+			uint8_t color = 255 - 85 * GetColor(backgroundColors[offsetX + 256 * offsetY]);
 			SDL_SetRenderDrawColor(renderer, color, color, color, 255);
 			SDL_RenderDrawPoint(renderer, offsetX, offsetY);
 		}
@@ -163,7 +221,7 @@ void PPU::DrawTileMap()
 		{
 			for (uint16_t offsetY = 0; offsetY < 256; offsetY++)
 			{
-				uint8_t color = 255 - 85 * backgroundColors[{offsetX, offsetY}];
+				uint8_t color = 255 - 85 * GetColor(backgroundColors[{offsetX, offsetY}]);
 				SDL_SetRenderDrawColor(renderer, color, color, color, 255);
 				SDL_RenderDrawPoint(renderer, offsetX, offsetY);
 			}
@@ -247,6 +305,25 @@ uint8_t PPU::GetColor(uint8_t index)
 		return (BGPalette & 0b00110000) >> 4;
 	case 3:
 		return (BGPalette & 0b11000000) >> 6;
+	default:
+		return 0;
+	}
+}
+
+uint8_t PPU::GetObjectColor(uint8_t index, bool paletteChoice)
+{
+	_ASSERTE(index < 4);
+
+	switch (index)
+	{
+	case 0:
+		return paletteChoice ? (OBP1 & 0b00000011) : (OBP1 & 0b00000011);
+	case 1:
+		return paletteChoice ? (OBP1 & 0b00001100) >> 2 : (OBP0 & 0b00001100) >> 2;
+	case 2:
+		return paletteChoice ? (OBP1 & 0b00110000) >> 4 : (OBP1 & 0b00110000) >> 4;
+	case 3:
+		return paletteChoice ? (OBP1 & 0b11000000) >> 6 : (OBP0 & 0b11000000) >> 6;
 	default:
 		return 0;
 	}
